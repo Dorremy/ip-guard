@@ -21,6 +21,7 @@ public sealed class TrayApp : ApplicationContext
     private readonly IpWatcher watcher;
     private readonly IpMonitor monitor;
     private readonly ToolStripMenuItem header = new("Проверка...") { Enabled = false };
+    private readonly ToolStripMenuItem reference = new("") { Enabled = false, Visible = false };
     private HistoryForm? historyForm;
     private int networkBurst;
     private bool rerun;
@@ -90,13 +91,15 @@ public sealed class TrayApp : ApplicationContext
             if (current is not null)
             {
                 settings.HomeCountryCode = current.CountryCode;
-                settingsStore.Save(settings);
+                SaveSettings();
                 await CheckAsync(true, 1);
             }
         };
 
         var history = new ToolStripMenuItem("История...");
         history.Click += (_, _) => ShowHistory();
+
+        var sounds = BuildSoundMenu();
 
         var autostart = new ToolStripMenuItem("Запускать вместе с Windows")
         {
@@ -120,11 +123,13 @@ public sealed class TrayApp : ApplicationContext
         menu.Items.AddRange(new ToolStripItem[]
         {
             header,
+            reference,
             new ToolStripSeparator(),
             check,
             trust,
             home,
             history,
+            sounds,
             new ToolStripSeparator(),
             autostart,
             folder,
@@ -133,6 +138,77 @@ public sealed class TrayApp : ApplicationContext
             exit
         });
         return menu;
+    }
+
+    private ToolStripMenuItem BuildSoundMenu()
+    {
+        var root = new ToolStripMenuItem("Звуки");
+        var done = new ToolStripMenuItem("Готово");
+        KeepOpenOnChoice(root.DropDown, item => item != done);
+
+        var enabled = new ToolStripMenuItem("Включены")
+        {
+            CheckOnClick = true,
+            Checked = settings.SoundEnabled
+        };
+        enabled.CheckedChanged += (_, _) =>
+        {
+            settings.SoundEnabled = enabled.Checked;
+            SaveSettings();
+        };
+        root.DropDownItems.Add(enabled);
+        root.DropDownItems.Add(new ToolStripSeparator());
+
+        foreach (var (key, title) in Sounds.Kinds)
+        {
+            var kind = new ToolStripMenuItem(title);
+            KeepOpenOnChoice(kind.DropDown, _ => true);
+            for (var variant = 1; variant <= Sounds.Variants; variant++)
+            {
+                var number = variant;
+                var item = new ToolStripMenuItem($"Вариант {number}") { Checked = settings.SoundVariant(key) == number };
+                item.Click += (_, _) =>
+                {
+                    settings.Sounds[key] = number;
+                    SaveSettings();
+                    foreach (ToolStripMenuItem sibling in kind.DropDownItems)
+                    {
+                        sibling.Checked = sibling == item;
+                    }
+
+                    Sounds.Play(key, number);
+                };
+                kind.DropDownItems.Add(item);
+            }
+
+            root.DropDownItems.Add(kind);
+        }
+
+        root.DropDownItems.Add(new ToolStripSeparator());
+        root.DropDownItems.Add(done);
+        return root;
+    }
+
+    private static void KeepOpenOnChoice(ToolStripDropDown dropDown, Func<ToolStripItem, bool> keepOpen)
+    {
+        dropDown.Closing += (_, e) =>
+        {
+            var selected = dropDown.Items.Cast<ToolStripItem>().FirstOrDefault(item => item.Selected);
+            e.Cancel = e.CloseReason == ToolStripDropDownCloseReason.ItemClicked
+                && selected is not null
+                && keepOpen(selected);
+        };
+    }
+
+    private void SaveSettings()
+    {
+        try
+        {
+            settingsStore.Save(settings);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 
     private void ShowHistory()
@@ -239,6 +315,14 @@ public sealed class TrayApp : ApplicationContext
         var tip = info is null ? "IpGuard: нет связи" : $"{info.CountryCode} {info.Ip} — {Labels.For(verdict.Status)}";
         tray.Text = tip.Length > 63 ? tip[..63] : tip;
         header.Text = info is null ? "Нет связи" : $"{info.Ip} · {info.Country} · {info.Provider}";
+        var abroad = info is not null && info.CountryCode != settings.HomeCountryCode;
+        reference.Visible = abroad;
+        if (abroad)
+        {
+            reference.Text = state.Trusted.TryGetValue(info!.CountryCode, out var trusted)
+                ? $"Эталон для {info.CountryCode}: {trusted}"
+                : $"Эталон для {info.CountryCode} не задан";
+        }
 
         if (verdict.Notify)
         {
@@ -246,6 +330,10 @@ public sealed class TrayApp : ApplicationContext
                 ? ToolTipIcon.Warning
                 : ToolTipIcon.Info;
             tray.ShowBalloonTip(6000, verdict.Title, verdict.Message, icon);
+            if (settings.SoundEnabled && Sounds.KeyFor(verdict.Status) is { } key)
+            {
+                Sounds.Play(key, settings.SoundVariant(key));
+            }
         }
     }
 }

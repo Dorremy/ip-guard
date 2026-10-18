@@ -8,7 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>IpGuard</AssemblyName>
     <RootNamespace>IpGuard</RootNamespace>
-    <Version>0.1.2</Version>
+    <Version>0.1.3</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
     <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
@@ -20,6 +20,7 @@
     <EmbeddedResource Include="Assets\vpnoff.ico" LogicalName="icons.vpnoff.ico" />
     <EmbeddedResource Include="Assets\home.ico" LogicalName="icons.home.ico" />
     <EmbeddedResource Include="Assets\offline.ico" LogicalName="icons.offline.ico" />
+    <EmbeddedResource Include="Assets\Sounds\*.wav" LogicalName="sounds.%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

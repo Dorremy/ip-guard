@@ -29,6 +29,11 @@ public sealed class Settings
 {
     public string HomeCountryCode { get; set; } = "RU";
     public int IntervalSeconds { get; set; } = 15;
+    public bool SoundEnabled { get; set; } = true;
+    public Dictionary<string, int> Sounds { get; set; } = new();
+
+    public int SoundVariant(string key) =>
+        Sounds.TryGetValue(key, out var variant) && variant >= 1 && variant <= IpGuard.Sounds.Variants ? variant : 1;
 }
 
 public static class Labels
