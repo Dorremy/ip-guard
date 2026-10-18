@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>IpGuard</AssemblyName>
+    <RootNamespace>IpGuard</RootNamespace>
+    <Version>0.1.0</Version>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\ready.ico" LogicalName="icons.ready.ico" />
+    <EmbeddedResource Include="Assets\changed.ico" LogicalName="icons.changed.ico" />
+    <EmbeddedResource Include="Assets\vpnoff.ico" LogicalName="icons.vpnoff.ico" />
+    <EmbeddedResource Include="Assets\home.ico" LogicalName="icons.home.ico" />
+    <EmbeddedResource Include="Assets\offline.ico" LogicalName="icons.offline.ico" />
+  </ItemGroup>
+
+</Project>
