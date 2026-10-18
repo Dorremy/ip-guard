@@ -3,23 +3,38 @@ using System.Text.Json;
 
 namespace IpGuard;
 
-public sealed class IpLookup
+public interface IIpLookup
 {
-    private static readonly HttpClient Http = CreateClient();
+    Task<IpInfo?> GetAsync();
+}
 
-    private static readonly (string Url, Func<string, IpInfo?> Parse)[] Sources =
+public sealed class IpLookup : IIpLookup
+{
+    private static readonly (string Url, Func<string, IpInfo?> Parse)[] DefaultSources =
     {
         ("https://api.2ip.io/", ParseTwoIp),
         ("https://ipwho.is/", ParseIpWho)
     };
 
+    private readonly HttpClient http = CreateClient();
+    private readonly (string Url, Func<string, IpInfo?> Parse)[] sources;
+
+    public IpLookup() : this(DefaultSources)
+    {
+    }
+
+    public IpLookup((string Url, Func<string, IpInfo?> Parse)[] sources)
+    {
+        this.sources = sources;
+    }
+
     public async Task<IpInfo?> GetAsync()
     {
-        foreach (var (url, parse) in Sources)
+        foreach (var (url, parse) in sources)
         {
             try
             {
-                var body = await Http.GetStringAsync(url);
+                var body = await http.GetStringAsync(url);
                 var info = parse(body);
                 if (info is not null)
                 {
@@ -78,7 +93,9 @@ public sealed class IpLookup
 
     private static HttpClient CreateClient()
     {
-        var client = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+        var handler = new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.Zero };
+        var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(8) };
+        client.DefaultRequestHeaders.ConnectionClose = true;
         client.DefaultRequestHeaders.UserAgent.ParseAdd("IpGuard/0.1");
         return client;
     }

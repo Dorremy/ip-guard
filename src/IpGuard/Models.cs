@@ -27,7 +27,7 @@ public sealed class MonitorState
 public sealed class Settings
 {
     public string HomeCountryCode { get; set; } = "RU";
-    public int IntervalSeconds { get; set; } = 60;
+    public int IntervalSeconds { get; set; } = 15;
 }
 
 public static class Labels

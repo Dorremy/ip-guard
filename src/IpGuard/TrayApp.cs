@@ -6,9 +6,11 @@ namespace IpGuard;
 
 public sealed class TrayApp : ApplicationContext
 {
+    private const int NetworkBurstChecks = 3;
+
     private readonly NotifyIcon tray = new();
     private readonly System.Windows.Forms.Timer pollTimer = new();
-    private readonly System.Windows.Forms.Timer networkTimer = new() { Interval = 4000 };
+    private readonly System.Windows.Forms.Timer networkTimer = new() { Interval = 3000 };
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly SynchronizationContext ui;
     private readonly string dataDir;
@@ -17,9 +19,11 @@ public sealed class TrayApp : ApplicationContext
     private readonly Settings settings;
     private readonly MonitorState state;
     private readonly IpWatcher watcher;
-    private readonly IpLookup lookup = new();
+    private readonly IpMonitor monitor;
     private readonly ToolStripMenuItem header = new("Проверка...") { Enabled = false };
-    private IpInfo? current;
+    private HistoryForm? historyForm;
+    private int networkBurst;
+    private bool rerun;
 
     public TrayApp()
     {
@@ -30,6 +34,7 @@ public sealed class TrayApp : ApplicationContext
         settings = settingsStore.Load();
         state = stateStore.Load();
         watcher = new IpWatcher(state, () => settings.HomeCountryCode);
+        monitor = new IpMonitor(new IpLookup(), watcher, Persist);
 
         tray.Icon = TrayIcons.For(Status.Unavailable);
         tray.Text = "IpGuard";
@@ -41,11 +46,7 @@ public sealed class TrayApp : ApplicationContext
         pollTimer.Tick += async (_, _) => await CheckAsync(false, 2);
         pollTimer.Start();
 
-        networkTimer.Tick += async (_, _) =>
-        {
-            networkTimer.Stop();
-            await CheckAsync(false, 3);
-        };
+        networkTimer.Tick += async (_, _) => await OnNetworkTimerAsync();
 
         NetworkChange.NetworkAddressChanged += OnNetworkChanged;
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
@@ -74,6 +75,7 @@ public sealed class TrayApp : ApplicationContext
         var trust = new ToolStripMenuItem("Принять текущий IP как эталон");
         trust.Click += async (_, _) =>
         {
+            var current = monitor.Current;
             if (current is not null && current.CountryCode != settings.HomeCountryCode)
             {
                 watcher.Trust(current);
@@ -84,6 +86,7 @@ public sealed class TrayApp : ApplicationContext
         var home = new ToolStripMenuItem("Считать текущую страну домашней");
         home.Click += async (_, _) =>
         {
+            var current = monitor.Current;
             if (current is not null)
             {
                 settings.HomeCountryCode = current.CountryCode;
@@ -131,17 +134,49 @@ public sealed class TrayApp : ApplicationContext
 
     private void ShowHistory()
     {
-        using var form = new HistoryForm(state, settings.HomeCountryCode);
-        form.ShowDialog();
+        if (historyForm is { IsDisposed: false })
+        {
+            if (historyForm.WindowState == FormWindowState.Minimized)
+            {
+                historyForm.WindowState = FormWindowState.Normal;
+            }
+
+            historyForm.Activate();
+            return;
+        }
+
+        historyForm = new HistoryForm(state, settings.HomeCountryCode);
+        historyForm.FormClosed += (_, _) => historyForm = null;
+        historyForm.Show();
     }
 
     private void OnNetworkChanged(object? sender, EventArgs e)
     {
         ui.Post(_ =>
         {
+            networkBurst = NetworkBurstChecks;
             networkTimer.Stop();
+            networkTimer.Interval = 3000;
             networkTimer.Start();
         }, null);
+    }
+
+    private async Task OnNetworkTimerAsync()
+    {
+        networkTimer.Stop();
+        if (networkBurst <= 0)
+        {
+            return;
+        }
+
+        networkBurst--;
+        if (networkBurst > 0)
+        {
+            networkTimer.Interval = 7000;
+            networkTimer.Start();
+        }
+
+        await CheckAsync(false, 2);
     }
 
     private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
@@ -162,25 +197,21 @@ public sealed class TrayApp : ApplicationContext
     {
         if (!await gate.WaitAsync(0))
         {
+            rerun = true;
             return;
         }
 
         try
         {
-            IpInfo? info = null;
-            for (var i = 0; i < attempts && info is null; i++)
+            do
             {
-                info = await lookup.GetAsync();
-                if (info is null && i < attempts - 1)
-                {
-                    await Task.Delay(4000);
-                }
+                rerun = false;
+                var (verdict, info) = await monitor.CheckAsync(force, attempts);
+                Show(verdict, info);
+                force = false;
+                attempts = Math.Min(attempts, 2);
             }
-
-            current = info;
-            var verdict = watcher.Evaluate(info, force);
-            Persist();
-            Show(verdict, info);
+            while (rerun);
         }
         finally
         {
