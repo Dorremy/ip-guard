@@ -112,6 +112,8 @@ public sealed class TrayApp : ApplicationContext
             Process.Start(new ProcessStartInfo("explorer.exe", dataDir) { UseShellExecute = true });
         };
 
+        var version = new ToolStripMenuItem($"Версия {Application.ProductVersion.Split('+')[0]}") { Enabled = false };
+
         var exit = new ToolStripMenuItem("Выход");
         exit.Click += (_, _) => ExitThread();
 
@@ -127,6 +129,7 @@ public sealed class TrayApp : ApplicationContext
             autostart,
             folder,
             new ToolStripSeparator(),
+            version,
             exit
         });
         return menu;

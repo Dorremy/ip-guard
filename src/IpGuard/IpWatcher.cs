@@ -51,20 +51,28 @@ public sealed class IpWatcher
 
         if (!state.Trusted.TryGetValue(info.CountryCode, out var trusted))
         {
-            state.Trusted[info.CountryCode] = info.Ip;
-            return new Verdict(Status.Ready, "Готов к работе", $"{place}. Эталонный IP для этой страны сохранён", true);
+            var pending = force || previous != Status.NoReference || state.LastIp != info.Ip;
+            return new Verdict(
+                Status.NoReference,
+                "Эталон не задан",
+                $"{place}. Чтобы запомнить этот IP, выберите в меню трея «Принять текущий IP как эталон»",
+                pending);
         }
 
         if (trusted == info.Ip)
         {
             var notify = force
-                || (previous != Status.Unchanged && previous != Status.Ready)
+                || previous != Status.Unchanged
                 || state.LastCountryCode != info.CountryCode;
-            return new Verdict(Status.Unchanged, "Готов к работе", $"{place}. IP совпадает с эталоном", notify);
+            return new Verdict(Status.Unchanged, "Готов к работе", $"{place}. IP совпадает с эталонным", notify);
         }
 
         var alert = force || previous != Status.Changed || state.LastIp != info.Ip;
-        return new Verdict(Status.Changed, "IP изменился!", $"{place}. Эталон: {trusted}", alert);
+        return new Verdict(
+            Status.Changed,
+            "IP отличается от эталонного!",
+            $"Сейчас: {place}. Эталонный IP: {trusted}",
+            alert);
     }
 
     private void Record(IpInfo info, Status status)

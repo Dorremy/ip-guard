@@ -4,10 +4,11 @@ public enum Status
 {
     Unavailable,
     Home,
-    Ready,
+    NoReference,
     Unchanged,
     Changed,
-    VpnOff
+    VpnOff,
+    Ready
 }
 
 public sealed record IpInfo(string Ip, string CountryCode, string Country, string Provider);
@@ -36,10 +37,11 @@ public static class Labels
     {
         Status.Unavailable => "Нет связи",
         Status.Home => "Без VPN",
-        Status.Ready => "Новый эталон",
+        Status.NoReference => "Эталон не задан",
         Status.Unchanged => "IP совпадает",
         Status.Changed => "IP изменился",
         Status.VpnOff => "VPN отключился",
+        Status.Ready => "Эталон сохранён",
         _ => status.ToString()
     };
 }

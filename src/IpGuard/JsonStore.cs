@@ -27,11 +27,26 @@ public sealed class JsonStore<T> where T : new()
                 return JsonSerializer.Deserialize<T>(File.ReadAllText(path), Options) ?? new T();
             }
         }
-        catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException)
+        catch (JsonException)
+        {
+            Backup();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
         }
 
         return new T();
+    }
+
+    private void Backup()
+    {
+        try
+        {
+            File.Copy(path, $"{path}.{DateTime.Now:yyyyMMdd-HHmmss}.bad", true);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 
     public void Save(T value)

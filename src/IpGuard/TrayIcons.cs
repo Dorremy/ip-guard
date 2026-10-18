@@ -19,7 +19,8 @@ public static class TrayIcons
 
     private static string NameOf(Status status) => status switch
     {
-        Status.Ready or Status.Unchanged => "ready",
+        Status.Unchanged => "ready",
+        Status.NoReference => "vpnoff",
         Status.Changed => "changed",
         Status.VpnOff => "vpnoff",
         Status.Home => "home",
