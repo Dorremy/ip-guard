@@ -31,6 +31,8 @@ public sealed class Settings
     public string HomeCountryCode { get; set; } = "RU";
     public int IntervalSeconds { get; set; } = 15;
     public bool SoundEnabled { get; set; } = true;
+    public bool CheckDirectRoute { get; set; } = true;
+    public bool CheckIpv6 { get; set; } = true;
     public Dictionary<string, int> Sounds { get; set; } = new();
 
     public int SoundVariant(string key) =>

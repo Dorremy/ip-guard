@@ -10,6 +10,8 @@ public sealed class IpMonitor
     private readonly IIpLookup? direct;
     private readonly IIpLookup? ipv6;
     private readonly Func<bool> proxyActive;
+    private readonly Func<bool> directEnabled;
+    private readonly Func<bool> ipv6Enabled;
 
     public IpMonitor(
         IIpLookup lookup,
@@ -19,7 +21,9 @@ public sealed class IpMonitor
         Func<string>? home = null,
         IIpLookup? direct = null,
         IIpLookup? ipv6 = null,
-        Func<bool>? proxyActive = null)
+        Func<bool>? proxyActive = null,
+        Func<bool>? directEnabled = null,
+        Func<bool>? ipv6Enabled = null)
     {
         this.lookup = lookup;
         this.watcher = watcher;
@@ -29,6 +33,8 @@ public sealed class IpMonitor
         this.direct = direct;
         this.ipv6 = ipv6;
         this.proxyActive = proxyActive ?? (() => false);
+        this.directEnabled = directEnabled ?? (() => true);
+        this.ipv6Enabled = ipv6Enabled ?? (() => true);
     }
 
     public IpInfo? Current { get; private set; }
@@ -60,9 +66,9 @@ public sealed class IpMonitor
         Proxied = false;
         if (info is not null && info.CountryCode != home())
         {
-            Proxied = direct is not null && proxyActive();
+            Proxied = direct is not null && directEnabled() && proxyActive();
             DirectInfo = Proxied ? await direct!.GetAsync() : null;
-            Ipv6Info = ipv6 is not null ? await ipv6.GetAsync() : null;
+            Ipv6Info = ipv6 is not null && ipv6Enabled() ? await ipv6.GetAsync() : null;
             leak = LeakDetector.Find(info, DirectInfo, Ipv6Info, home());
         }
 

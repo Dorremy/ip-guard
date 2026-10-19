@@ -48,7 +48,9 @@ public sealed class TrayApp : ApplicationContext
             home: () => settings.HomeCountryCode,
             direct: IpLookup.Direct(),
             ipv6: new Ipv6Lookup(),
-            proxyActive: IpLookup.SystemProxyActive);
+            proxyActive: IpLookup.SystemProxyActive,
+            directEnabled: () => settings.CheckDirectRoute,
+            ipv6Enabled: () => settings.CheckIpv6);
 
         tray.Icon = TrayIcons.For(Status.Unavailable);
         tray.Text = "IpGuard";
@@ -117,6 +119,7 @@ public sealed class TrayApp : ApplicationContext
         history.Click += (_, _) => ShowHistory();
 
         var sounds = BuildSoundMenu();
+        var leaks = BuildLeakMenu();
 
         var autostart = new ToolStripMenuItem("Запускать вместе с Windows")
         {
@@ -160,6 +163,7 @@ public sealed class TrayApp : ApplicationContext
             home,
             history,
             sounds,
+            leaks,
             new ToolStripSeparator(),
             autostart,
             folder,
@@ -229,6 +233,42 @@ public sealed class TrayApp : ApplicationContext
                 && selected is not null
                 && keepOpen(selected);
         };
+    }
+
+    private ToolStripMenuItem BuildLeakMenu()
+    {
+        var root = new ToolStripMenuItem("Проверки утечек");
+        KeepOpenOnChoice(root.DropDown, _ => true);
+
+        var direct = new ToolStripMenuItem("Прямой маршрут (без прокси)")
+        {
+            CheckOnClick = true,
+            Checked = settings.CheckDirectRoute
+        };
+        direct.CheckedChanged += async (_, _) =>
+        {
+            settings.CheckDirectRoute = direct.Checked;
+            SaveSettings();
+            journal.Write($"Проверка прямого маршрута: {(direct.Checked ? "включена" : "выключена")}");
+            await CheckAsync(true, 1, "настройки");
+        };
+
+        var ipv6 = new ToolStripMenuItem("IPv6")
+        {
+            CheckOnClick = true,
+            Checked = settings.CheckIpv6
+        };
+        ipv6.CheckedChanged += async (_, _) =>
+        {
+            settings.CheckIpv6 = ipv6.Checked;
+            SaveSettings();
+            journal.Write($"Проверка IPv6: {(ipv6.Checked ? "включена" : "выключена")}");
+            await CheckAsync(true, 1, "настройки");
+        };
+
+        root.DropDownItems.Add(direct);
+        root.DropDownItems.Add(ipv6);
+        return root;
     }
 
     private void SaveSettings()
@@ -357,7 +397,7 @@ public sealed class TrayApp : ApplicationContext
             ? $"Без прокси: {direct.Ip} · {direct.CountryCode}"
             : "Без прокси: не определён";
 
-        ipv6Route.Visible = abroad;
+        ipv6Route.Visible = abroad && settings.CheckIpv6;
         ipv6Route.Text = monitor.Ipv6Info is { } v6
             ? $"IPv6: {v6.Ip}" + (v6.CountryCode.Length == 2 ? $" · {v6.CountryCode}" : "")
             : "IPv6: нет";
