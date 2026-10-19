@@ -44,7 +44,10 @@ public sealed class TrayApp : ApplicationContext
         journal = new Journal(Path.Combine(dataDir, "log.txt"));
         settings = settingsStore.Load();
         state = stateStore.Load();
-        watcher = new IpWatcher(state, () => settings.HomeCountryCode);
+        watcher = new IpWatcher(
+            state,
+            () => settings.HomeCountryCode,
+            outageThreshold: () => TimeSpan.FromSeconds(Math.Max(0, settings.OutageSeconds)));
         monitor = new IpMonitor(
             primary,
             watcher,
@@ -128,6 +131,7 @@ public sealed class TrayApp : ApplicationContext
         };
 
         var quietMenu = BuildQuietMenu();
+        var outageMenu = BuildOutageMenu();
         var sounds = BuildSoundMenu();
         var leaks = BuildLeakMenu();
 
@@ -173,6 +177,7 @@ public sealed class TrayApp : ApplicationContext
             home,
             history,
             quietMenu,
+            outageMenu,
             sounds,
             leaks,
             alertSwitch,
@@ -292,6 +297,31 @@ public sealed class TrayApp : ApplicationContext
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
         }
+    }
+
+    private ToolStripMenuItem BuildOutageMenu()
+    {
+        var root = new ToolStripMenuItem("Сообщать о потере связи");
+        KeepOpenOnChoice(root.DropDown, _ => true);
+        var choices = new (int Seconds, string Title)[] { (0, "Сразу"), (15, "Через 15 секунд"), (30, "Через 30 секунд"), (60, "Через минуту") };
+
+        foreach (var (seconds, title) in choices)
+        {
+            var item = new ToolStripMenuItem(title) { Checked = settings.OutageSeconds == seconds };
+            item.Click += (_, _) =>
+            {
+                settings.OutageSeconds = seconds;
+                SaveSettings();
+                journal.Write($"Сообщать о потере связи: {title.ToLowerInvariant()}");
+                foreach (ToolStripMenuItem sibling in root.DropDownItems)
+                {
+                    sibling.Checked = sibling == item;
+                }
+            };
+            root.DropDownItems.Add(item);
+        }
+
+        return root;
     }
 
     private ToolStripMenuItem BuildQuietMenu()

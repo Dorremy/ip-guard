@@ -2,13 +2,16 @@ namespace IpGuard;
 
 public sealed class IpWatcher
 {
-    public static readonly TimeSpan OutageThreshold = TimeSpan.FromMinutes(1);
+    public static readonly TimeSpan DefaultOutageThreshold = TimeSpan.FromSeconds(30);
+
+    private static readonly TimeSpan MinRecordedOutage = TimeSpan.FromSeconds(5);
 
     private const int HistoryLimit = 1000;
 
     private readonly MonitorState state;
     private readonly Func<string> homeCountry;
     private readonly Func<DateTime> now;
+    private readonly Func<TimeSpan> outageThreshold;
     private Status? previous;
     private DateTime? offlineSince;
     private bool offlineAlerted;
@@ -17,11 +20,12 @@ public sealed class IpWatcher
 
     public TimeSpan? LastOutage { get; private set; }
 
-    public IpWatcher(MonitorState state, Func<string> homeCountry, Func<DateTime>? now = null)
+    public IpWatcher(MonitorState state, Func<string> homeCountry, Func<DateTime>? now = null, Func<TimeSpan>? outageThreshold = null)
     {
         this.state = state;
         this.homeCountry = homeCountry;
         this.now = now ?? (() => DateTime.Now);
+        this.outageThreshold = outageThreshold ?? (() => DefaultOutageThreshold);
     }
 
     public static string FormatDuration(TimeSpan span)
@@ -64,12 +68,12 @@ public sealed class IpWatcher
             leak = null;
         }
 
-        if (restored is { } outage && outage.Span >= OutageThreshold)
+        if (restored is { } outage && (outage.Alerted || (outage.Span >= outageThreshold() && outage.Span >= MinRecordedOutage)))
         {
             LastOutage = outage.Span;
             verdict = verdict with
             {
-                Notify = verdict.Notify || outage.Alerted,
+                Notify = true,
                 Message = $"{verdict.Message}. Связи не было {FormatDuration(outage.Span)}"
             };
             RecordOutage(outage.Since, outage.Span);
@@ -123,6 +127,20 @@ public sealed class IpWatcher
         }
     }
 
+    public Verdict EvaluateProxyDown(IpInfo direct, bool force)
+    {
+        offlineSince = null;
+        offlineAlerted = false;
+        LastOutage = null;
+
+        var message = $"Прокси не отвечает, а напрямую интернет есть: {direct.Country} ({direct.CountryCode}), {direct.Ip}. Программы без прокси выходят напрямую";
+        var notify = force || previous != Status.Leak || Leak != message;
+        Leak = message;
+        previous = Status.Leak;
+        Record(direct, Status.Leak, message);
+        return new Verdict(Status.Leak, "Прокси не отвечает!", message, notify);
+    }
+
     public string? ReferenceFor(IpInfo info) =>
         info.CountryCode != homeCountry() && state.Trusted.TryGetValue(info.CountryCode, out var trusted) ? trusted : null;
 
@@ -137,8 +155,9 @@ public sealed class IpWatcher
     {
         if (info is null)
         {
+            var threshold = outageThreshold();
             var since = offlineSince ?? moment;
-            if (moment - since < OutageThreshold)
+            if (moment - since < threshold)
             {
                 return new Verdict(Status.Unavailable, "Нет связи", "Не удалось определить внешний IP", force);
             }
@@ -147,7 +166,7 @@ public sealed class IpWatcher
             offlineAlerted = true;
             return new Verdict(
                 Status.Unavailable,
-                "Нет связи больше минуты",
+                threshold < TimeSpan.FromSeconds(1) ? "Нет связи" : $"Нет связи больше {FormatDuration(threshold)}",
                 $"Нет связи с {since:HH:mm:ss}. Не удалось определить внешний IP",
                 force || first);
         }

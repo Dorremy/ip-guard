@@ -62,6 +62,21 @@ public sealed class IpMonitor
         }
 
         Disagreement = null;
+        if (info is null && direct is not null && directEnabled() && proxyActive())
+        {
+            var viaDirect = await direct.GetAsync();
+            if (viaDirect is not null && (viaDirect.CountryCode == home() || watcher.IsMismatch(viaDirect)))
+            {
+                Current = null;
+                Proxied = true;
+                DirectInfo = viaDirect;
+                Ipv6Info = null;
+                var alarm = watcher.EvaluateProxyDown(viaDirect, force);
+                save();
+                return (alarm, viaDirect);
+            }
+        }
+
         if (info is not null && watcher.IsMismatch(info))
         {
             var second = await lookup.GetAsync();
