@@ -11,49 +11,73 @@ public interface IIpLookup
 
 public sealed class IpLookup : IIpLookup
 {
-    private static readonly Uri ProxyProbe = new("https://api.2ip.io/");
+    private static readonly TimeSpan LimitPause = TimeSpan.FromMinutes(30);
 
     private static readonly (string Url, Func<string, IpInfo?> Parse)[] DefaultSources =
     {
         ("https://api.2ip.io/", ParseTwoIp),
-        ("https://ipwho.is/", ParseIpWho)
+        ("https://ipwho.is/", ParseIpWho),
+        ("https://ipinfo.io/json", ParseIpInfo),
+        ("https://ifconfig.co/json", ParseIfconfig)
     };
 
-    private readonly HttpClient http;
+    private readonly Func<IWebProxy?> proxy;
     private readonly (string Url, Func<string, IpInfo?> Parse)[] sources;
+    private readonly DateTime[] pausedUntil;
+    private readonly Func<DateTime> now;
+    private int next;
 
-    public IpLookup() : this(DefaultSources, CreateClient(true))
+    public IpLookup() : this(DefaultSources, SystemProxy.Current)
     {
     }
 
-    public IpLookup((string Url, Func<string, IpInfo?> Parse)[] sources) : this(sources, CreateClient(true))
+    public IpLookup((string Url, Func<string, IpInfo?> Parse)[] sources) : this(sources, SystemProxy.Current)
     {
     }
 
-    private IpLookup((string Url, Func<string, IpInfo?> Parse)[] sources, HttpClient http)
+    public IpLookup((string Url, Func<string, IpInfo?> Parse)[] sources, Func<IWebProxy?> proxy, Func<DateTime>? now = null)
     {
         this.sources = sources;
-        this.http = http;
+        this.proxy = proxy;
+        this.now = now ?? (() => DateTime.UtcNow);
+        pausedUntil = new DateTime[sources.Length];
     }
 
-    public static IpLookup Direct() => new(DefaultSources, CreateClient(false));
+    public IReadOnlyList<string> PausedSources =>
+        sources.Where((_, i) => pausedUntil[i] > now()).Select(source => new Uri(source.Url).Host).ToList();
 
-    public static bool SystemProxyActive()
-    {
-        var proxy = HttpClient.DefaultProxy.GetProxy(ProxyProbe);
-        return proxy is not null && proxy != ProxyProbe;
-    }
+    public static IpLookup Direct() => new(DefaultSources, () => null);
+
+    public static bool SystemProxyActive() => SystemProxy.Current() is not null;
 
     public async Task<IpInfo?> GetAsync()
     {
-        foreach (var (url, parse) in sources)
+        using var http = CreateClient(proxy());
+        var order = Enumerable.Range(0, sources.Length).Select(k => (next + k) % sources.Length).ToList();
+        var available = order.Where(i => pausedUntil[i] <= now()).ToList();
+        if (available.Count == 0)
         {
+            available = order.OrderBy(i => pausedUntil[i]).Take(1).ToList();
+        }
+
+        foreach (var i in available)
+        {
+            var (url, parse) = sources[i];
             try
             {
-                var body = await http.GetStringAsync(url);
-                var info = parse(body);
+                using var response = await http.GetAsync(url);
+                if (response.StatusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                {
+                    pausedUntil[i] = now() + LimitPause;
+                    continue;
+                }
+
+                response.EnsureSuccessStatusCode();
+                var info = parse(await response.Content.ReadAsStringAsync());
                 if (info is not null)
                 {
+                    pausedUntil[i] = default;
+                    next = (i + 1) % sources.Length;
                     return info;
                 }
             }
@@ -90,6 +114,23 @@ public sealed class IpLookup : IIpLookup
         return Build(Text(root, "ip"), Text(root, "country_code"), Text(root, "country"), provider);
     }
 
+    public static IpInfo? ParseIpInfo(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        var code = Text(root, "country");
+        var org = Text(root, "org");
+        var provider = org.StartsWith("AS", StringComparison.Ordinal) && org.Contains(' ') ? org[(org.IndexOf(' ') + 1)..] : org;
+        return Build(Text(root, "ip"), code, code, provider);
+    }
+
+    public static IpInfo? ParseIfconfig(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        return Build(Text(root, "ip"), Text(root, "country_iso"), Text(root, "country"), Text(root, "asn_org"));
+    }
+
     public static string? ParseIpOnly(string json)
     {
         using var doc = JsonDocument.Parse(json);
@@ -97,11 +138,12 @@ public sealed class IpLookup : IIpLookup
         return IPAddress.TryParse(ip, out _) ? ip : null;
     }
 
-    internal static HttpClient CreateClient(bool useProxy, bool ipv6Only = false)
+    internal static HttpClient CreateClient(IWebProxy? proxy, bool ipv6Only = false)
     {
         var handler = new SocketsHttpHandler
         {
-            UseProxy = useProxy,
+            UseProxy = proxy is not null,
+            Proxy = proxy,
             PooledConnectionLifetime = TimeSpan.Zero
         };
         if (ipv6Only)

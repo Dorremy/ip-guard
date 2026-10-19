@@ -6,8 +6,7 @@ namespace IpGuard;
 
 public sealed class Ipv6Lookup : IIpLookup
 {
-    private readonly HttpClient v6 = IpLookup.CreateClient(false, true);
-    private readonly HttpClient geo = IpLookup.CreateClient(true);
+    private readonly HttpClient v6 = IpLookup.CreateClient(null, true);
     private readonly string addressUrl;
     private readonly Func<string, string> geoUrl;
     private IpInfo? cached;
@@ -42,6 +41,7 @@ public sealed class Ipv6Lookup : IIpLookup
 
         try
         {
+            using var geo = IpLookup.CreateClient(SystemProxy.Current());
             cached = IpLookup.ParseIpWho(await geo.GetStringAsync(geoUrl(ip)));
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException)

@@ -20,6 +20,9 @@ public sealed class TrayApp : ApplicationContext
     private readonly MonitorState state;
     private readonly IpWatcher watcher;
     private readonly IpMonitor monitor;
+    private readonly IpLookup primary = new();
+    private readonly Journal journal;
+    private string? lastRecord;
     private readonly ToolStripMenuItem header = new("Проверка...") { Enabled = false };
     private readonly ToolStripMenuItem reference = new("") { Enabled = false, Visible = false };
     private HistoryForm? historyForm;
@@ -32,11 +35,12 @@ public sealed class TrayApp : ApplicationContext
         dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "IpGuard");
         settingsStore = new JsonStore<Settings>(Path.Combine(dataDir, "settings.json"));
         stateStore = new JsonStore<MonitorState>(Path.Combine(dataDir, "state.json"));
+        journal = new Journal(Path.Combine(dataDir, "log.txt"));
         settings = settingsStore.Load();
         state = stateStore.Load();
         watcher = new IpWatcher(state, () => settings.HomeCountryCode);
         monitor = new IpMonitor(
-            new IpLookup(),
+            primary,
             watcher,
             Persist,
             home: () => settings.HomeCountryCode,
@@ -51,7 +55,7 @@ public sealed class TrayApp : ApplicationContext
         tray.Visible = true;
 
         pollTimer.Interval = Math.Max(15, settings.IntervalSeconds) * 1000;
-        pollTimer.Tick += async (_, _) => await CheckAsync(false, 2);
+        pollTimer.Tick += async (_, _) => await CheckAsync(false, 2, "таймер");
         pollTimer.Start();
 
         networkTimer.Tick += async (_, _) => await OnNetworkTimerAsync();
@@ -59,11 +63,13 @@ public sealed class TrayApp : ApplicationContext
         NetworkChange.NetworkAddressChanged += OnNetworkChanged;
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
 
-        _ = CheckAsync(true, 5);
+        journal.Write($"Запуск, версия {Application.ProductVersion.Split('+')[0]}");
+        _ = CheckAsync(true, 5, "запуск");
     }
 
     protected override void ExitThreadCore()
     {
+        journal.Write("Выход");
         NetworkChange.NetworkAddressChanged -= OnNetworkChanged;
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         pollTimer.Stop();
@@ -78,7 +84,7 @@ public sealed class TrayApp : ApplicationContext
         var menu = new ContextMenuStrip();
 
         var check = new ToolStripMenuItem("Проверить сейчас");
-        check.Click += async (_, _) => await CheckAsync(true, 2);
+        check.Click += async (_, _) => await CheckAsync(true, 2, "вручную");
 
         var trust = new ToolStripMenuItem("Принять текущий IP как эталон");
         trust.Click += async (_, _) =>
@@ -87,7 +93,8 @@ public sealed class TrayApp : ApplicationContext
             if (current is not null && current.CountryCode != settings.HomeCountryCode)
             {
                 watcher.Trust(current);
-                await CheckAsync(true, 1);
+                journal.Write($"Эталон для {current.CountryCode}: {current.Ip}");
+                await CheckAsync(true, 1, "новый эталон");
             }
         };
 
@@ -99,7 +106,8 @@ public sealed class TrayApp : ApplicationContext
             {
                 settings.HomeCountryCode = current.CountryCode;
                 SaveSettings();
-                await CheckAsync(true, 1);
+                journal.Write($"Домашняя страна: {current.CountryCode}");
+                await CheckAsync(true, 1, "домашняя страна");
             }
         };
 
@@ -124,6 +132,17 @@ public sealed class TrayApp : ApplicationContext
 
         var version = new ToolStripMenuItem($"Версия {Application.ProductVersion.Split('+')[0]}") { Enabled = false };
 
+        var log = new ToolStripMenuItem("Открыть журнал");
+        log.Click += (_, _) =>
+        {
+            if (!File.Exists(journal.Path))
+            {
+                journal.Write("Журнал создан");
+            }
+
+            Process.Start(new ProcessStartInfo(journal.Path) { UseShellExecute = true });
+        };
+
         var exit = new ToolStripMenuItem("Выход");
         exit.Click += (_, _) => ExitThread();
 
@@ -140,6 +159,7 @@ public sealed class TrayApp : ApplicationContext
             new ToolStripSeparator(),
             autostart,
             folder,
+            log,
             new ToolStripSeparator(),
             version,
             exit
@@ -262,7 +282,7 @@ public sealed class TrayApp : ApplicationContext
             networkTimer.Start();
         }
 
-        await CheckAsync(false, 2);
+        await CheckAsync(false, 2, "смена сети");
     }
 
     private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
@@ -275,11 +295,11 @@ public sealed class TrayApp : ApplicationContext
         ui.Post(async _ =>
         {
             await Task.Delay(6000);
-            await CheckAsync(true, 6);
+            await CheckAsync(true, 6, "пробуждение");
         }, null);
     }
 
-    private async Task CheckAsync(bool force, int attempts)
+    private async Task CheckAsync(bool force, int attempts, string reason)
     {
         if (!await gate.WaitAsync(0))
         {
@@ -293,8 +313,10 @@ public sealed class TrayApp : ApplicationContext
             {
                 rerun = false;
                 var (verdict, info) = await monitor.CheckAsync(force, attempts);
+                Record(reason, verdict, info);
                 Show(verdict, info);
                 force = false;
+                reason = "повтор";
                 attempts = Math.Min(attempts, 2);
             }
             while (rerun);
@@ -303,6 +325,24 @@ public sealed class TrayApp : ApplicationContext
         {
             gate.Release();
         }
+    }
+
+    private void Record(string reason, Verdict verdict, IpInfo? info)
+    {
+        var place = info is null ? "адрес не определён" : $"{info.Ip} {info.CountryCode}";
+        var proxy = SystemProxy.Current() is null ? "без прокси" : "через прокси";
+        var paused = primary.PausedSources.Count == 0 ? "" : $" | на паузе: {string.Join(", ", primary.PausedSources)}";
+        var summary = $"{Labels.For(verdict.Status)} | {place} | {proxy}{paused}";
+        if (reason == "таймер" && !verdict.Notify && summary == lastRecord)
+        {
+            return;
+        }
+
+        lastRecord = summary;
+        var leak = monitor.Leak is null ? "" : $" | {monitor.Leak}";
+        var alert = verdict.Notify ? " | уведомление" : "";
+        var provider = string.IsNullOrEmpty(info?.Provider) ? "" : $" | {info.Provider}";
+        journal.Write($"{reason}: {summary}{provider}{leak}{alert}");
     }
 
     private void Persist()
