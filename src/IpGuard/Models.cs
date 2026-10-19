@@ -16,7 +16,7 @@ public sealed record IpInfo(string Ip, string CountryCode, string Country, strin
 
 public sealed record Verdict(Status Status, string Title, string Message, bool Notify);
 
-public sealed record HistoryEntry(DateTime Time, string Ip, string CountryCode, string Country, string Provider, Status Status);
+public sealed record HistoryEntry(DateTime Time, string Ip, string CountryCode, string Country, string Provider, Status Status, string? Note = null);
 
 public sealed class MonitorState
 {

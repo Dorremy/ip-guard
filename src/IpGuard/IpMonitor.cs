@@ -10,7 +10,6 @@ public sealed class IpMonitor
     private readonly IIpLookup? direct;
     private readonly IIpLookup? ipv6;
     private readonly Func<bool> proxyActive;
-    private string? lastLeak;
 
     public IpMonitor(
         IIpLookup lookup,
@@ -34,7 +33,13 @@ public sealed class IpMonitor
 
     public IpInfo? Current { get; private set; }
 
-    public string? Leak => lastLeak;
+    public string? Leak => watcher.Leak;
+
+    public IpInfo? DirectInfo { get; private set; }
+
+    public IpInfo? Ipv6Info { get; private set; }
+
+    public bool Proxied { get; private set; }
 
     public async Task<(Verdict Verdict, IpInfo? Info)> CheckAsync(bool force, int attempts)
     {
@@ -49,29 +54,19 @@ public sealed class IpMonitor
         }
 
         Current = info;
-        var verdict = watcher.Evaluate(info, force);
-
-        if (info is not null && verdict.Status is Status.Unchanged or Status.NoReference or Status.Changed)
+        string? leak = null;
+        DirectInfo = null;
+        Ipv6Info = null;
+        Proxied = false;
+        if (info is not null && info.CountryCode != home())
         {
-            var directInfo = direct is not null && proxyActive() ? await direct.GetAsync() : null;
-            var ipv6Info = ipv6 is not null ? await ipv6.GetAsync() : null;
-            var leak = LeakDetector.Find(info, directInfo, ipv6Info, home());
-            if (leak is not null && verdict.Status != Status.Changed)
-            {
-                verdict = new Verdict(Status.Leak, "Утечка мимо VPN!", leak, force || leak != lastLeak);
-            }
-            else if (leak is null && lastLeak is not null)
-            {
-                verdict = verdict with { Notify = true };
-            }
-
-            lastLeak = leak;
-        }
-        else
-        {
-            lastLeak = null;
+            Proxied = direct is not null && proxyActive();
+            DirectInfo = Proxied ? await direct!.GetAsync() : null;
+            Ipv6Info = ipv6 is not null ? await ipv6.GetAsync() : null;
+            leak = LeakDetector.Find(info, DirectInfo, Ipv6Info, home());
         }
 
+        var verdict = watcher.Evaluate(info, force, leak);
         save();
         return (verdict, info);
     }

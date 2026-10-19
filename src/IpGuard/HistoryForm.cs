@@ -5,7 +5,7 @@ public sealed class HistoryForm : Form
     public HistoryForm(MonitorState state, string home)
     {
         Text = "История IP";
-        Size = new Size(860, 480);
+        Size = new Size(1180, 480);
         StartPosition = FormStartPosition.CenterScreen;
 
         var trusted = state.Trusted.Count == 0
@@ -31,6 +31,7 @@ public sealed class HistoryForm : Form
         list.Columns.Add("Страна", 180);
         list.Columns.Add("Провайдер", 220);
         list.Columns.Add("Статус", 150);
+        list.Columns.Add("Примечание", 360);
 
         foreach (var entry in Enumerable.Reverse(state.History))
         {
@@ -40,7 +41,8 @@ public sealed class HistoryForm : Form
                 entry.Ip,
                 $"{entry.Country} ({entry.CountryCode})",
                 entry.Provider,
-                Labels.For(entry.Status)
+                Labels.For(entry.Status),
+                entry.Note?.Replace("\n", "; ") ?? ""
             }));
         }
 

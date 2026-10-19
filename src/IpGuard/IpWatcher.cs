@@ -8,19 +8,40 @@ public sealed class IpWatcher
     private readonly Func<string> homeCountry;
     private Status? previous;
 
+    public string? Leak { get; private set; }
+
     public IpWatcher(MonitorState state, Func<string> homeCountry)
     {
         this.state = state;
         this.homeCountry = homeCountry;
     }
 
-    public Verdict Evaluate(IpInfo? info, bool force)
+    public Verdict Evaluate(IpInfo? info, bool force, string? leak = null)
     {
         var verdict = Decide(info, force);
+        if (info is not null && verdict.Status is Status.Unchanged or Status.NoReference or Status.Changed)
+        {
+            if (leak is not null && verdict.Status != Status.Changed)
+            {
+                verdict = new Verdict(Status.Leak, "Утечка мимо VPN!", leak, force || leak != Leak);
+            }
+            else if (leak is null && Leak is not null)
+            {
+                verdict = verdict with { Notify = true };
+            }
+
+            Leak = leak;
+        }
+        else
+        {
+            Leak = null;
+            leak = null;
+        }
+
         previous = verdict.Status;
         if (info is not null)
         {
-            Record(info, verdict.Status);
+            Record(info, verdict.Status, leak);
         }
 
         return verdict;
@@ -75,12 +96,12 @@ public sealed class IpWatcher
             alert);
     }
 
-    private void Record(IpInfo info, Status status)
+    private void Record(IpInfo info, Status status, string? note)
     {
         var last = state.History.Count > 0 ? state.History[^1] : null;
-        if (last is null || last.Ip != info.Ip || last.CountryCode != info.CountryCode || last.Status != status)
+        if (last is null || last.Ip != info.Ip || last.CountryCode != info.CountryCode || last.Status != status || last.Note != note)
         {
-            state.History.Add(new HistoryEntry(DateTime.Now, info.Ip, info.CountryCode, info.Country, info.Provider, status));
+            state.History.Add(new HistoryEntry(DateTime.Now, info.Ip, info.CountryCode, info.Country, info.Provider, status, note));
             if (state.History.Count > HistoryLimit)
             {
                 state.History.RemoveRange(0, state.History.Count - HistoryLimit);

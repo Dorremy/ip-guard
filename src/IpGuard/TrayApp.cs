@@ -25,6 +25,8 @@ public sealed class TrayApp : ApplicationContext
     private string? lastRecord;
     private readonly ToolStripMenuItem header = new("Проверка...") { Enabled = false };
     private readonly ToolStripMenuItem reference = new("") { Enabled = false, Visible = false };
+    private readonly ToolStripMenuItem directRoute = new("") { Enabled = false, Visible = false };
+    private readonly ToolStripMenuItem ipv6Route = new("") { Enabled = false, Visible = false };
     private HistoryForm? historyForm;
     private int networkBurst;
     private bool rerun;
@@ -149,6 +151,8 @@ public sealed class TrayApp : ApplicationContext
         menu.Items.AddRange(new ToolStripItem[]
         {
             header,
+            directRoute,
+            ipv6Route,
             reference,
             new ToolStripSeparator(),
             check,
@@ -345,6 +349,20 @@ public sealed class TrayApp : ApplicationContext
         journal.Write($"{reason}: {summary}{provider}{leak}{alert}");
     }
 
+    private void ShowRoutes(IpInfo? info)
+    {
+        var abroad = info is not null && info.CountryCode != settings.HomeCountryCode;
+        directRoute.Visible = abroad && monitor.Proxied;
+        directRoute.Text = monitor.DirectInfo is { } direct
+            ? $"Без прокси: {direct.Ip} · {direct.CountryCode}"
+            : "Без прокси: не определён";
+
+        ipv6Route.Visible = abroad;
+        ipv6Route.Text = monitor.Ipv6Info is { } v6
+            ? $"IPv6: {v6.Ip}" + (v6.CountryCode.Length == 2 ? $" · {v6.CountryCode}" : "")
+            : "IPv6: нет";
+    }
+
     private void Persist()
     {
         try
@@ -362,6 +380,7 @@ public sealed class TrayApp : ApplicationContext
         var tip = info is null ? "IpGuard: нет связи" : $"{info.CountryCode} {info.Ip} — {Labels.For(verdict.Status)}";
         tray.Text = tip.Length > 63 ? tip[..63] : tip;
         header.Text = info is null ? "Нет связи" : $"{info.Ip} · {info.Country} · {info.Provider}";
+        ShowRoutes(info);
         var abroad = info is not null && info.CountryCode != settings.HomeCountryCode;
         reference.Visible = abroad;
         if (abroad)
