@@ -474,6 +474,11 @@ public sealed class TrayApp : ApplicationContext
         lastRecord = summary;
         var leak = monitor.Leak is null ? "" : $" | {monitor.Leak}";
         var alert = verdict.Notify ? " | уведомление" : "";
+        if (watcher.LastOutage is { } outage)
+        {
+            alert += $" | связи не было {IpWatcher.FormatDuration(outage)}";
+        }
+
         if (monitor.Disagreement is { } disagreement)
         {
             alert += $" | источники расходятся: {disagreement}";

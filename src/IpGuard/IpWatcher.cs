@@ -2,23 +2,49 @@ namespace IpGuard;
 
 public sealed class IpWatcher
 {
+    public static readonly TimeSpan OutageThreshold = TimeSpan.FromMinutes(1);
+
     private const int HistoryLimit = 1000;
 
     private readonly MonitorState state;
     private readonly Func<string> homeCountry;
+    private readonly Func<DateTime> now;
     private Status? previous;
+    private DateTime? offlineSince;
+    private bool offlineAlerted;
 
     public string? Leak { get; private set; }
 
-    public IpWatcher(MonitorState state, Func<string> homeCountry)
+    public TimeSpan? LastOutage { get; private set; }
+
+    public IpWatcher(MonitorState state, Func<string> homeCountry, Func<DateTime>? now = null)
     {
         this.state = state;
         this.homeCountry = homeCountry;
+        this.now = now ?? (() => DateTime.Now);
+    }
+
+    public static string FormatDuration(TimeSpan span)
+    {
+        if (span.TotalHours >= 1)
+        {
+            return $"{(int)span.TotalHours} ч {span.Minutes} мин";
+        }
+
+        if (span.TotalMinutes >= 1)
+        {
+            return span.Seconds == 0 ? $"{span.Minutes} мин" : $"{span.Minutes} мин {span.Seconds} с";
+        }
+
+        return $"{Math.Max(0, (int)span.TotalSeconds)} с";
     }
 
     public Verdict Evaluate(IpInfo? info, bool force, string? leak = null)
     {
-        var verdict = Decide(info, force);
+        var moment = now();
+        LastOutage = null;
+        var restored = TrackOutage(info, moment);
+        var verdict = Decide(info, force, moment);
         if (info is not null && verdict.Status is Status.Unchanged or Status.NoReference or Status.Changed)
         {
             if (leak is not null && verdict.Status != Status.Changed)
@@ -38,13 +64,63 @@ public sealed class IpWatcher
             leak = null;
         }
 
-        previous = verdict.Status;
+        if (restored is { } outage && outage.Span >= OutageThreshold)
+        {
+            LastOutage = outage.Span;
+            verdict = verdict with
+            {
+                Notify = verdict.Notify || outage.Alerted,
+                Message = $"{verdict.Message}. Связи не было {FormatDuration(outage.Span)}"
+            };
+            RecordOutage(outage.Since, outage.Span);
+        }
+
+        if (verdict.Status != Status.Unavailable || offlineAlerted)
+        {
+            previous = verdict.Status;
+        }
+
         if (info is not null)
         {
             Record(info, verdict.Status, leak);
         }
 
         return verdict;
+    }
+
+    private (DateTime Since, TimeSpan Span, bool Alerted)? TrackOutage(IpInfo? info, DateTime moment)
+    {
+        if (info is null)
+        {
+            offlineSince ??= moment;
+            return null;
+        }
+
+        if (offlineSince is not { } since)
+        {
+            return null;
+        }
+
+        var result = (since, moment - since, offlineAlerted);
+        offlineSince = null;
+        offlineAlerted = false;
+        return result;
+    }
+
+    private void RecordOutage(DateTime since, TimeSpan span)
+    {
+        state.History.Add(new HistoryEntry(
+            since,
+            state.LastIp ?? "",
+            state.LastCountryCode ?? "",
+            "",
+            "",
+            Status.Unavailable,
+            $"Связи не было {FormatDuration(span)}"));
+        if (state.History.Count > HistoryLimit)
+        {
+            state.History.RemoveRange(0, state.History.Count - HistoryLimit);
+        }
     }
 
     public string? ReferenceFor(IpInfo info) =>
@@ -57,11 +133,23 @@ public sealed class IpWatcher
         state.Trusted[info.CountryCode] = info.Ip;
     }
 
-    private Verdict Decide(IpInfo? info, bool force)
+    private Verdict Decide(IpInfo? info, bool force, DateTime moment)
     {
         if (info is null)
         {
-            return new Verdict(Status.Unavailable, "Нет связи", "Не удалось определить внешний IP", previous != Status.Unavailable);
+            var since = offlineSince ?? moment;
+            if (moment - since < OutageThreshold)
+            {
+                return new Verdict(Status.Unavailable, "Нет связи", "Не удалось определить внешний IP", force);
+            }
+
+            var first = !offlineAlerted;
+            offlineAlerted = true;
+            return new Verdict(
+                Status.Unavailable,
+                "Нет связи больше минуты",
+                $"Нет связи с {since:HH:mm:ss}. Не удалось определить внешний IP",
+                force || first);
         }
 
         var place = $"{info.Country} ({info.CountryCode}), {info.Ip}";
