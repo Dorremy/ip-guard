@@ -29,6 +29,9 @@ public sealed class TrayApp : ApplicationContext
     private readonly ToolStripMenuItem ipv6Route = new("") { Enabled = false, Visible = false };
     private HistoryForm? historyForm;
     private AlertForm? alertForm;
+    private readonly QuietMode quiet = new();
+    private readonly System.Windows.Forms.Timer quietTimer = new();
+    private ToolStripMenuItem? quietRoot;
     private int networkBurst;
     private bool rerun;
 
@@ -75,6 +78,7 @@ public sealed class TrayApp : ApplicationContext
     protected override void ExitThreadCore()
     {
         journal.Write("Выход");
+        quietTimer.Dispose();
         alertForm?.Dispose();
         NetworkChange.NetworkAddressChanged -= OnNetworkChanged;
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
@@ -123,6 +127,7 @@ public sealed class TrayApp : ApplicationContext
             journal.Write($"Окно тревоги: {(alertSwitch.Checked ? "включено" : "выключено")}");
         };
 
+        var quietMenu = BuildQuietMenu();
         var sounds = BuildSoundMenu();
         var leaks = BuildLeakMenu();
 
@@ -167,6 +172,7 @@ public sealed class TrayApp : ApplicationContext
             trust,
             home,
             history,
+            quietMenu,
             sounds,
             leaks,
             alertSwitch,
@@ -288,6 +294,59 @@ public sealed class TrayApp : ApplicationContext
         }
     }
 
+    private ToolStripMenuItem BuildQuietMenu()
+    {
+        var root = new ToolStripMenuItem(quiet.Title);
+        quietRoot = root;
+        var stop = new ToolStripMenuItem("Выключить") { Enabled = false };
+
+        void Apply(TimeSpan? duration)
+        {
+            if (duration is { } span)
+            {
+                quiet.Start(span);
+                quietTimer.Interval = (int)Math.Min(int.MaxValue, span.TotalMilliseconds + 500);
+                quietTimer.Stop();
+                quietTimer.Start();
+                journal.Write($"Не беспокоить: {span.TotalMinutes:0} мин");
+            }
+            else
+            {
+                quiet.Stop();
+                quietTimer.Stop();
+                journal.Write("Не беспокоить: выключено");
+            }
+
+            RefreshQuietMenu(root, stop);
+        }
+
+        foreach (var minutes in new[] { 15, 30, 60 })
+        {
+            var item = new ToolStripMenuItem($"{minutes} минут");
+            item.Click += (_, _) => Apply(TimeSpan.FromMinutes(minutes));
+            root.DropDownItems.Add(item);
+        }
+
+        root.DropDownItems.Add(new ToolStripSeparator());
+        stop.Click += (_, _) => Apply(null);
+        root.DropDownItems.Add(stop);
+
+        quietTimer.Tick += (_, _) =>
+        {
+            quietTimer.Stop();
+            journal.Write("Не беспокоить: время вышло");
+            RefreshQuietMenu(root, stop);
+        };
+        root.DropDownOpening += (_, _) => RefreshQuietMenu(root, stop);
+        return root;
+    }
+
+    private void RefreshQuietMenu(ToolStripMenuItem root, ToolStripMenuItem stop)
+    {
+        root.Text = quiet.Title;
+        stop.Enabled = quiet.Active;
+    }
+
     private async Task AcceptCurrentAsReferenceAsync()
     {
         var current = monitor.Current;
@@ -301,10 +360,9 @@ public sealed class TrayApp : ApplicationContext
 
     private void ShowAlert(Verdict verdict)
     {
-        alertForm ??= new AlertForm(() => settings.SoundEnabled);
-        if (alertForm.IsDisposed)
+        if (alertForm is null or { IsDisposed: true })
         {
-            alertForm = new AlertForm(() => settings.SoundEnabled);
+            alertForm = new AlertForm(() => settings.SoundEnabled && !quiet.Active);
         }
 
         var key = Sounds.KeyFor(verdict.Status);
@@ -467,28 +525,27 @@ public sealed class TrayApp : ApplicationContext
         }
 
         var alarm = verdict.Status is Status.Changed or Status.Leak;
-        if (alarm && settings.AlertWindow)
+        var plan = NotificationPolicy.Decide(verdict, settings.AlertWindow, settings.SoundEnabled, quiet.Active);
+        if (plan.Window)
         {
-            if (verdict.Notify)
-            {
-                ShowAlert(verdict);
-            }
+            ShowAlert(verdict);
         }
-        else if (alertForm is { IsDisposed: false, Active: true })
+        else if (!(alarm && settings.AlertWindow) && alertForm is { IsDisposed: false, Active: true })
         {
             alertForm.Resolve($"{verdict.Title}. {verdict.Message}");
         }
 
-        if (verdict.Notify && !(alarm && settings.AlertWindow))
+        if (plan.Balloon)
         {
             var icon = verdict.Status is Status.Changed or Status.Leak or Status.VpnOff or Status.Unavailable
                 ? ToolTipIcon.Warning
                 : ToolTipIcon.Info;
             tray.ShowBalloonTip(6000, verdict.Title, verdict.Message, icon);
-            if (settings.SoundEnabled && Sounds.KeyFor(verdict.Status) is { } key)
-            {
-                Sounds.Play(key, settings.SoundVariant(key));
-            }
+        }
+
+        if (plan.Sound && Sounds.KeyFor(verdict.Status) is { } key)
+        {
+            Sounds.Play(key, settings.SoundVariant(key));
         }
     }
 }
