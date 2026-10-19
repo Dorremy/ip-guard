@@ -47,6 +47,11 @@ public sealed class IpWatcher
         return verdict;
     }
 
+    public string? ReferenceFor(IpInfo info) =>
+        info.CountryCode != homeCountry() && state.Trusted.TryGetValue(info.CountryCode, out var trusted) ? trusted : null;
+
+    public bool IsMismatch(IpInfo info) => ReferenceFor(info) is { } trusted && trusted != info.Ip;
+
     public void Trust(IpInfo info)
     {
         state.Trusted[info.CountryCode] = info.Ip;

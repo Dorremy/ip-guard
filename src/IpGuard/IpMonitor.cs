@@ -47,6 +47,8 @@ public sealed class IpMonitor
 
     public bool Proxied { get; private set; }
 
+    public string? Disagreement { get; private set; }
+
     public async Task<(Verdict Verdict, IpInfo? Info)> CheckAsync(bool force, int attempts)
     {
         IpInfo? info = null;
@@ -56,6 +58,20 @@ public sealed class IpMonitor
             if (info is null && i < attempts - 1)
             {
                 await delay(TimeSpan.FromSeconds(4));
+            }
+        }
+
+        Disagreement = null;
+        if (info is not null && watcher.IsMismatch(info))
+        {
+            var second = await lookup.GetAsync();
+            if (second is not null && second.Ip != info.Ip)
+            {
+                Disagreement = $"{info.Ip} и {second.Ip}";
+                if (watcher.ReferenceFor(second) == second.Ip)
+                {
+                    info = second;
+                }
             }
         }
 

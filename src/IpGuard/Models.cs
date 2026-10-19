@@ -33,6 +33,7 @@ public sealed class Settings
     public bool SoundEnabled { get; set; } = true;
     public bool CheckDirectRoute { get; set; } = true;
     public bool CheckIpv6 { get; set; } = true;
+    public bool AlertWindow { get; set; } = true;
     public Dictionary<string, int> Sounds { get; set; } = new();
 
     public int SoundVariant(string key) =>

@@ -28,6 +28,7 @@ public sealed class TrayApp : ApplicationContext
     private readonly ToolStripMenuItem directRoute = new("") { Enabled = false, Visible = false };
     private readonly ToolStripMenuItem ipv6Route = new("") { Enabled = false, Visible = false };
     private HistoryForm? historyForm;
+    private AlertForm? alertForm;
     private int networkBurst;
     private bool rerun;
 
@@ -74,6 +75,7 @@ public sealed class TrayApp : ApplicationContext
     protected override void ExitThreadCore()
     {
         journal.Write("Выход");
+        alertForm?.Dispose();
         NetworkChange.NetworkAddressChanged -= OnNetworkChanged;
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         pollTimer.Stop();
@@ -91,16 +93,7 @@ public sealed class TrayApp : ApplicationContext
         check.Click += async (_, _) => await CheckAsync(true, 2, "вручную");
 
         var trust = new ToolStripMenuItem("Принять текущий IP как эталон");
-        trust.Click += async (_, _) =>
-        {
-            var current = monitor.Current;
-            if (current is not null && current.CountryCode != settings.HomeCountryCode)
-            {
-                watcher.Trust(current);
-                journal.Write($"Эталон для {current.CountryCode}: {current.Ip}");
-                await CheckAsync(true, 1, "новый эталон");
-            }
-        };
+        trust.Click += async (_, _) => await AcceptCurrentAsReferenceAsync();
 
         var home = new ToolStripMenuItem("Считать текущую страну домашней");
         home.Click += async (_, _) =>
@@ -117,6 +110,18 @@ public sealed class TrayApp : ApplicationContext
 
         var history = new ToolStripMenuItem("История...");
         history.Click += (_, _) => ShowHistory();
+
+        var alertSwitch = new ToolStripMenuItem("Окно тревоги")
+        {
+            CheckOnClick = true,
+            Checked = settings.AlertWindow
+        };
+        alertSwitch.CheckedChanged += (_, _) =>
+        {
+            settings.AlertWindow = alertSwitch.Checked;
+            SaveSettings();
+            journal.Write($"Окно тревоги: {(alertSwitch.Checked ? "включено" : "выключено")}");
+        };
 
         var sounds = BuildSoundMenu();
         var leaks = BuildLeakMenu();
@@ -164,6 +169,7 @@ public sealed class TrayApp : ApplicationContext
             history,
             sounds,
             leaks,
+            alertSwitch,
             new ToolStripSeparator(),
             autostart,
             folder,
@@ -282,6 +288,31 @@ public sealed class TrayApp : ApplicationContext
         }
     }
 
+    private async Task AcceptCurrentAsReferenceAsync()
+    {
+        var current = monitor.Current;
+        if (current is not null && current.CountryCode != settings.HomeCountryCode)
+        {
+            watcher.Trust(current);
+            journal.Write($"Эталон для {current.CountryCode}: {current.Ip}");
+            await CheckAsync(true, 1, "новый эталон");
+        }
+    }
+
+    private void ShowAlert(Verdict verdict)
+    {
+        alertForm ??= new AlertForm(() => settings.SoundEnabled);
+        if (alertForm.IsDisposed)
+        {
+            alertForm = new AlertForm(() => settings.SoundEnabled);
+        }
+
+        var key = Sounds.KeyFor(verdict.Status);
+        var canAccept = verdict.Status == Status.Changed;
+        alertForm.Raise(verdict, key, key is null ? 1 : settings.SoundVariant(key), canAccept, async () => await AcceptCurrentAsReferenceAsync());
+        journal.Write($"Окно тревоги: {verdict.Title}");
+    }
+
     private void ShowHistory()
     {
         if (historyForm is { IsDisposed: false })
@@ -385,6 +416,11 @@ public sealed class TrayApp : ApplicationContext
         lastRecord = summary;
         var leak = monitor.Leak is null ? "" : $" | {monitor.Leak}";
         var alert = verdict.Notify ? " | уведомление" : "";
+        if (monitor.Disagreement is { } disagreement)
+        {
+            alert += $" | источники расходятся: {disagreement}";
+        }
+
         var provider = string.IsNullOrEmpty(info?.Provider) ? "" : $" | {info.Provider}";
         journal.Write($"{reason}: {summary}{provider}{leak}{alert}");
     }
@@ -430,7 +466,20 @@ public sealed class TrayApp : ApplicationContext
                 : $"Эталон для {info.CountryCode} не задан";
         }
 
-        if (verdict.Notify)
+        var alarm = verdict.Status is Status.Changed or Status.Leak;
+        if (alarm && settings.AlertWindow)
+        {
+            if (verdict.Notify)
+            {
+                ShowAlert(verdict);
+            }
+        }
+        else if (alertForm is { IsDisposed: false, Active: true })
+        {
+            alertForm.Resolve($"{verdict.Title}. {verdict.Message}");
+        }
+
+        if (verdict.Notify && !(alarm && settings.AlertWindow))
         {
             var icon = verdict.Status is Status.Changed or Status.Leak or Status.VpnOff or Status.Unavailable
                 ? ToolTipIcon.Warning
