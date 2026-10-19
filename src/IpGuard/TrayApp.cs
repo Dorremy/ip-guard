@@ -35,7 +35,14 @@ public sealed class TrayApp : ApplicationContext
         settings = settingsStore.Load();
         state = stateStore.Load();
         watcher = new IpWatcher(state, () => settings.HomeCountryCode);
-        monitor = new IpMonitor(new IpLookup(), watcher, Persist);
+        monitor = new IpMonitor(
+            new IpLookup(),
+            watcher,
+            Persist,
+            home: () => settings.HomeCountryCode,
+            direct: IpLookup.Direct(),
+            ipv6: new Ipv6Lookup(),
+            proxyActive: IpLookup.SystemProxyActive);
 
         tray.Icon = TrayIcons.For(Status.Unavailable);
         tray.Text = "IpGuard";
@@ -159,14 +166,14 @@ public sealed class TrayApp : ApplicationContext
         root.DropDownItems.Add(enabled);
         root.DropDownItems.Add(new ToolStripSeparator());
 
-        foreach (var (key, title) in Sounds.Kinds)
+        foreach (var (key, title, names) in Sounds.Kinds)
         {
             var kind = new ToolStripMenuItem(title);
             KeepOpenOnChoice(kind.DropDown, _ => true);
             for (var variant = 1; variant <= Sounds.Variants; variant++)
             {
                 var number = variant;
-                var item = new ToolStripMenuItem($"Вариант {number}") { Checked = settings.SoundVariant(key) == number };
+                var item = new ToolStripMenuItem(names[number - 1]) { Checked = settings.SoundVariant(key) == number };
                 item.Click += (_, _) =>
                 {
                     settings.Sounds[key] = number;
@@ -326,7 +333,7 @@ public sealed class TrayApp : ApplicationContext
 
         if (verdict.Notify)
         {
-            var icon = verdict.Status is Status.Changed or Status.VpnOff or Status.Unavailable
+            var icon = verdict.Status is Status.Changed or Status.Leak or Status.VpnOff or Status.Unavailable
                 ? ToolTipIcon.Warning
                 : ToolTipIcon.Info;
             tray.ShowBalloonTip(6000, verdict.Title, verdict.Message, icon);

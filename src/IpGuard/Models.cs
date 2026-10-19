@@ -8,7 +8,8 @@ public enum Status
     Unchanged,
     Changed,
     VpnOff,
-    Ready
+    Ready,
+    Leak
 }
 
 public sealed record IpInfo(string Ip, string CountryCode, string Country, string Provider);
@@ -47,6 +48,7 @@ public static class Labels
         Status.Changed => "IP изменился",
         Status.VpnOff => "VPN отключился",
         Status.Ready => "Эталон сохранён",
+        Status.Leak => "Утечка мимо VPN",
         _ => status.ToString()
     };
 }

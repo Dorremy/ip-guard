@@ -21,7 +21,7 @@ public static class TrayIcons
     {
         Status.Unchanged => "ready",
         Status.NoReference => "vpnoff",
-        Status.Changed => "changed",
+        Status.Changed or Status.Leak => "changed",
         Status.VpnOff => "vpnoff",
         Status.Home => "home",
         _ => "offline"
