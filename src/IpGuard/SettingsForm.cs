@@ -4,6 +4,8 @@ public sealed class SettingsForm : Form
 {
     public const int MinInterval = 15;
     public const int MaxInterval = 3600;
+    public const int MinPort = 1024;
+    public const int MaxPort = 65535;
 
     private static readonly (int Seconds, string Title)[] OutageChoices =
     {
@@ -21,6 +23,9 @@ public sealed class SettingsForm : Form
     private readonly ComboBox outage = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
     private readonly CheckBox alertWindow = new() { Text = "Показывать окно тревоги поверх всех окон", AutoSize = true };
     private readonly CheckBox soundBox = new() { Text = "Звуки включены", AutoSize = true };
+    private readonly CheckBox statusBox = new() { Text = "Отдавать статус скриптам на этом компьютере", AutoSize = true };
+    private readonly NumericUpDown statusPort = new() { Minimum = MinPort, Maximum = MaxPort, Width = 80 };
+    private readonly Label statusHint = new() { AutoSize = true, ForeColor = SystemColors.GrayText };
     private readonly TrackBar volume = new() { Minimum = 0, Maximum = 100, TickFrequency = 10, Width = 260, Height = 36 };
     private readonly Dictionary<string, ComboBox> variants = new();
     private readonly Button save = new() { Text = "Сохранить", AutoSize = true, DialogResult = DialogResult.OK };
@@ -37,7 +42,8 @@ public sealed class SettingsForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(560, 720);
+        var area = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 800);
+        ClientSize = new Size(580, Math.Min(860, area.Height - 100));
         AcceptButton = save;
         CancelButton = cancel;
 
@@ -53,6 +59,7 @@ public sealed class SettingsForm : Form
         root.Controls.Add(Group("Основное", Row("Домашняя страна", country), Row("Интервал проверки, секунд", interval), autostartBox));
         root.Controls.Add(Group("Проверки", direct, ipv6, Row("Сообщать о потере связи", outage)));
         root.Controls.Add(Group("Уведомления", alertWindow, soundBox, Row("Громкость", volume), VariantRows()));
+        root.Controls.Add(Group("Для скриптов", statusBox, Row("Порт", statusPort), statusHint));
 
         var buttons = new FlowLayoutPanel
         {
@@ -68,6 +75,7 @@ public sealed class SettingsForm : Form
         Controls.Add(buttons);
 
         Fill();
+        statusPort.ValueChanged += (_, _) => UpdateStatusHint();
         save.Click += (_, _) => Collect();
     }
 
@@ -84,6 +92,13 @@ public sealed class SettingsForm : Form
 
     public static int ClampInterval(int seconds) => Math.Clamp(seconds, MinInterval, MaxInterval);
 
+    public static int ClampPort(int port) => port is >= MinPort and <= MaxPort ? port : new Settings().StatusPort;
+
+    private void UpdateStatusHint()
+    {
+        statusHint.Text = $"Адрес: http://127.0.0.1:{(int)statusPort.Value}/status (только этот компьютер)";
+    }
+
     private void Fill()
     {
         foreach (var (code, title) in Countries.Choices(working.HomeCountryCode))
@@ -99,6 +114,9 @@ public sealed class SettingsForm : Form
         alertWindow.Checked = working.AlertWindow;
         soundBox.Checked = working.SoundEnabled;
         volume.Value = Math.Clamp(working.SoundVolume, 0, 100);
+        statusBox.Checked = working.StatusServerEnabled;
+        statusPort.Value = ClampPort(working.StatusPort);
+        UpdateStatusHint();
 
         foreach (var (seconds, title) in OutageChoices)
         {
@@ -119,6 +137,8 @@ public sealed class SettingsForm : Form
         working.AlertWindow = alertWindow.Checked;
         working.SoundEnabled = soundBox.Checked;
         working.SoundVolume = volume.Value;
+        working.StatusServerEnabled = statusBox.Checked;
+        working.StatusPort = ClampPort((int)statusPort.Value);
         foreach (var (key, box) in variants)
         {
             working.Sounds[key] = box.SelectedIndex + 1;

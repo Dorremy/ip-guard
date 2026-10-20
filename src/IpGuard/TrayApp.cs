@@ -35,6 +35,10 @@ public sealed class TrayApp : ApplicationContext
     private bool rerun;
     private bool settingsOpen;
     private bool referencesOpen;
+    private readonly StatusServer statusServer = new();
+    private readonly string statusPath;
+    private StatusSnapshot? lastSnapshot;
+    private int statusPortInUse;
 
     public TrayApp()
     {
@@ -43,6 +47,7 @@ public sealed class TrayApp : ApplicationContext
         settingsStore = new JsonStore<Settings>(Path.Combine(dataDir, "settings.json"));
         stateStore = new JsonStore<MonitorState>(Path.Combine(dataDir, "state.json"));
         journal = new Journal(Path.Combine(dataDir, "log.txt"));
+        statusPath = Path.Combine(dataDir, "status.json");
         settings = settingsStore.Load();
         Sounds.Volume = settings.SoundVolume;
         state = stateStore.Load();
@@ -77,6 +82,7 @@ public sealed class TrayApp : ApplicationContext
         NetworkChange.NetworkAddressChanged += OnNetworkChanged;
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
 
+        ApplyStatusServer();
         journal.Write($"Запуск, версия {Application.ProductVersion.Split('+')[0]}");
         _ = CheckAsync(true, 5, "запуск");
     }
@@ -84,6 +90,8 @@ public sealed class TrayApp : ApplicationContext
     protected override void ExitThreadCore()
     {
         journal.Write("Выход");
+        PublishStatus(new StatusSnapshot(false, "stopped", "IpGuard закрыт", "Программа не запущена, статус не обновляется", null, null, null, null, Array.Empty<string>(), null, DateTime.UtcNow, ProductVersion()));
+        statusServer.Dispose();
         quietTimer.Dispose();
         alertForm?.Dispose();
         NetworkChange.NetworkAddressChanged -= OnNetworkChanged;
@@ -292,6 +300,7 @@ public sealed class TrayApp : ApplicationContext
                 Autostart.Set(form.AutostartResult);
             }
 
+            ApplyStatusServer();
             journal.Write("Настройки сохранены");
             await CheckAsync(true, 1, "настройки");
         }
@@ -476,8 +485,68 @@ public sealed class TrayApp : ApplicationContext
         }
     }
 
+    private static string ProductVersion() => Application.ProductVersion.Split('+')[0];
+
+    private void ApplyStatusServer()
+    {
+        if (!settings.StatusServerEnabled)
+        {
+            if (statusServer.Running)
+            {
+                statusServer.Stop();
+                statusPortInUse = 0;
+                journal.Write("Локальный адрес статуса выключен");
+            }
+
+            return;
+        }
+
+        if (statusServer.Running && statusPortInUse == settings.StatusPort)
+        {
+            return;
+        }
+
+        if (statusServer.Start(settings.StatusPort, out var error))
+        {
+            statusPortInUse = settings.StatusPort;
+            if (lastSnapshot is not null)
+            {
+                statusServer.Update(lastSnapshot);
+            }
+
+            journal.Write($"Локальный адрес статуса: http://127.0.0.1:{settings.StatusPort}/status");
+        }
+        else
+        {
+            statusPortInUse = 0;
+            journal.Write($"Не удалось открыть порт {settings.StatusPort} для статуса: {error}");
+        }
+    }
+
+    private void PublishStatus(StatusSnapshot snapshot)
+    {
+        lastSnapshot = snapshot;
+        try
+        {
+            StatusMapper.WriteFile(statusPath, snapshot);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+        }
+
+        statusServer.Update(snapshot);
+    }
+
     private void Show(Verdict verdict, IpInfo? info)
     {
+        PublishStatus(StatusMapper.Build(
+            verdict,
+            info,
+            info is null ? Array.Empty<Reference>() : state.ReferencesFor(info.CountryCode),
+            monitor.Leak,
+            DateTime.UtcNow,
+            ProductVersion()));
+
         if (historyForm is { IsDisposed: false })
         {
             historyForm.Reload();

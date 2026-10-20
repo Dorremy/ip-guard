@@ -81,6 +81,8 @@ public sealed class Settings
     public bool AlertWindow { get; set; } = true;
     public int OutageSeconds { get; set; } = 30;
     public int SoundVolume { get; set; } = 100;
+    public bool StatusServerEnabled { get; set; } = false;
+    public int StatusPort { get; set; } = 47831;
     public Dictionary<string, int> Sounds { get; set; } = new();
 
     public void CopyFrom(Settings other)
@@ -93,6 +95,8 @@ public sealed class Settings
         AlertWindow = other.AlertWindow;
         OutageSeconds = other.OutageSeconds;
         SoundVolume = other.SoundVolume;
+        StatusServerEnabled = other.StatusServerEnabled;
+        StatusPort = other.StatusPort;
         Sounds = new Dictionary<string, int>(other.Sounds);
     }
 
