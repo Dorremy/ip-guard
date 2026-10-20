@@ -20,6 +20,8 @@ public sealed class IpWatcher
 
     public TimeSpan? LastOutage { get; private set; }
 
+    public TimeSpan? CurrentOutage => offlineSince is { } since ? now() - since : null;
+
     public IpWatcher(MonitorState state, Func<string> homeCountry, Func<DateTime>? now = null, Func<TimeSpan>? outageThreshold = null)
     {
         this.state = state;

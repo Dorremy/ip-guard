@@ -39,6 +39,8 @@ public sealed class TrayApp : ApplicationContext
     private readonly string statusPath;
     private StatusSnapshot? lastSnapshot;
     private int statusPortInUse;
+    private readonly ProtectionTrigger protection = new();
+    private ProtectForm? protectForm;
     private readonly UpdateChecker updates = new();
     private readonly System.Windows.Forms.Timer updateTimer = new() { Interval = 60 * 60 * 1000 };
     private readonly ToolStripMenuItem updateAvailable = new("") { Visible = false };
@@ -47,7 +49,7 @@ public sealed class TrayApp : ApplicationContext
     public TrayApp()
     {
         ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
-        dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "IpGuard");
+        dataDir = DataFolder.Current();
         settingsStore = new JsonStore<Settings>(Path.Combine(dataDir, "settings.json"));
         stateStore = new JsonStore<MonitorState>(Path.Combine(dataDir, "state.json"));
         journal = new Journal(Path.Combine(dataDir, "log.txt"));
@@ -101,6 +103,7 @@ public sealed class TrayApp : ApplicationContext
         statusServer.Dispose();
         quietTimer.Dispose();
         updateTimer.Dispose();
+        protectForm?.Dispose();
         alertForm?.Dispose();
         NetworkChange.NetworkAddressChanged -= OnNetworkChanged;
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
@@ -554,6 +557,47 @@ public sealed class TrayApp : ApplicationContext
         Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
     }
 
+    private void EvaluateProtection(Verdict verdict)
+    {
+        var reason = protection.Evaluate(settings, verdict.Status, watcher.CurrentOutage);
+        if (reason is null)
+        {
+            return;
+        }
+
+        var programs = settings.ProtectPrograms.ToList();
+        var text = reason == ProtectionReason.Alarm
+            ? verdict.Title
+            : $"Нет связи дольше {settings.ProtectOutageSeconds} с";
+        journal.Write($"Защита сработала ({text}): {string.Join(", ", programs)}; время на отмену {settings.ProtectGraceSeconds} с");
+
+        if (settings.ProtectGraceSeconds <= 0)
+        {
+            CloseProtectedPrograms(programs);
+            return;
+        }
+
+        if (protectForm is { IsDisposed: false })
+        {
+            return;
+        }
+
+        protectForm = new ProtectForm(
+            text,
+            programs,
+            settings.ProtectGraceSeconds,
+            () => CloseProtectedPrograms(programs),
+            () => journal.Write("Защита: закрытие отменено"));
+        protectForm.Begin();
+    }
+
+    private void CloseProtectedPrograms(IReadOnlyList<string> programs)
+    {
+        var report = ProgramCloser.Close(programs);
+        journal.Write($"Защита: {report.Summary}");
+        tray.ShowBalloonTip(6000, "IpGuard", $"Защита: {report.Summary}", ToolTipIcon.Warning);
+    }
+
     private static string ProductVersion() => Application.ProductVersion.Split('+')[0];
 
     private void ApplyStatusServer()
@@ -660,5 +704,7 @@ public sealed class TrayApp : ApplicationContext
         {
             Sounds.Play(key, settings.SoundVariant(key));
         }
+
+        EvaluateProtection(verdict);
     }
 }

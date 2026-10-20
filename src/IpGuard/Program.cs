@@ -5,7 +5,7 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
-        using var mutex = new Mutex(true, @"Local\IpGuard.SingleInstance", out var created);
+        using var mutex = new Mutex(true, DataFolder.MutexName(), out var created);
         if (!created)
         {
             return;

@@ -86,6 +86,12 @@ public sealed class Settings
     public bool UpdateCheckEnabled { get; set; } = true;
     public DateTime? LastUpdateCheckUtc { get; set; }
     public string NotifiedUpdate { get; set; } = "";
+    public bool ProtectEnabled { get; set; } = false;
+    public bool ProtectOnAlarm { get; set; } = true;
+    public bool ProtectOnOutage { get; set; } = false;
+    public int ProtectOutageSeconds { get; set; } = 30;
+    public int ProtectGraceSeconds { get; set; } = 10;
+    public List<string> ProtectPrograms { get; set; } = new();
     public Dictionary<string, int> Sounds { get; set; } = new();
 
     public void CopyFrom(Settings other)
@@ -103,6 +109,12 @@ public sealed class Settings
         UpdateCheckEnabled = other.UpdateCheckEnabled;
         LastUpdateCheckUtc = other.LastUpdateCheckUtc;
         NotifiedUpdate = other.NotifiedUpdate;
+        ProtectEnabled = other.ProtectEnabled;
+        ProtectOnAlarm = other.ProtectOnAlarm;
+        ProtectOnOutage = other.ProtectOnOutage;
+        ProtectOutageSeconds = other.ProtectOutageSeconds;
+        ProtectGraceSeconds = other.ProtectGraceSeconds;
+        ProtectPrograms = new List<string>(other.ProtectPrograms);
         Sounds = new Dictionary<string, int>(other.Sounds);
     }
 

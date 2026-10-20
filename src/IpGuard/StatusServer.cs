@@ -158,6 +158,7 @@ public sealed class StatusServer : IDisposable
                     if (length >= MaxRequestBytes)
                     {
                         await WriteAsync(stream, (431, "text/plain", "headers too large"), true, token);
+                        await DrainAsync(client, stream, token);
                         return;
                     }
                 }
@@ -176,6 +177,23 @@ public sealed class StatusServer : IDisposable
             catch (Exception e) when (e is OperationCanceledException or IOException or SocketException or ObjectDisposedException)
             {
             }
+        }
+    }
+
+    private static async Task DrainAsync(TcpClient client, NetworkStream stream, CancellationToken token)
+    {
+        try
+        {
+            client.Client.Shutdown(SocketShutdown.Send);
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(token);
+            limit.CancelAfter(TimeSpan.FromMilliseconds(500));
+            var sink = new byte[4096];
+            while (await stream.ReadAsync(sink, limit.Token) > 0)
+            {
+            }
+        }
+        catch (Exception e) when (e is OperationCanceledException or IOException or SocketException or ObjectDisposedException)
+        {
         }
     }
 
