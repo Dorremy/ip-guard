@@ -83,7 +83,7 @@ public sealed class IpMonitor
             if (second is not null && second.Ip != info.Ip)
             {
                 Disagreement = $"{info.Ip} и {second.Ip}";
-                if (watcher.ReferenceFor(second) == second.Ip)
+                if (watcher.IsReference(second))
                 {
                     info = second;
                 }

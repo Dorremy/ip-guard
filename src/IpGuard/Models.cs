@@ -18,12 +18,57 @@ public sealed record Verdict(Status Status, string Title, string Message, bool N
 
 public sealed record HistoryEntry(DateTime Time, string Ip, string CountryCode, string Country, string Provider, Status Status, string? Note = null);
 
+public sealed record Reference(string Country, string Ip, string Label = "");
+
 public sealed class MonitorState
 {
     public Dictionary<string, string> Trusted { get; set; } = new();
+    public List<Reference> References { get; set; } = new();
     public string? LastIp { get; set; }
     public string? LastCountryCode { get; set; }
     public List<HistoryEntry> History { get; set; } = new();
+
+    public void MigrateLegacy()
+    {
+        foreach (var (country, ip) in Trusted.ToList())
+        {
+            AddReference(new Reference(country, ip));
+        }
+
+        Trusted.Clear();
+    }
+
+    public IReadOnlyList<Reference> ReferencesFor(string country)
+    {
+        MigrateLegacy();
+        return References.Where(reference => reference.Country == country).ToList();
+    }
+
+    public bool AddReference(Reference reference)
+    {
+        if (References.Any(item => item.Country == reference.Country && item.Ip == reference.Ip))
+        {
+            return false;
+        }
+
+        References.Add(reference);
+        return true;
+    }
+
+    public bool RemoveReference(string country, string ip) =>
+        References.RemoveAll(item => item.Country == country && item.Ip == ip) > 0;
+
+    public bool RenameReference(string country, string ip, string label)
+    {
+        var index = References.FindIndex(item => item.Country == country && item.Ip == ip);
+        if (index < 0)
+        {
+            return false;
+        }
+
+        References[index] = References[index] with { Label = label.Trim() };
+        return true;
+    }
 }
 
 public sealed class Settings

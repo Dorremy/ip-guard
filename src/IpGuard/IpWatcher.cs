@@ -141,15 +141,22 @@ public sealed class IpWatcher
         return new Verdict(Status.Leak, "Прокси не отвечает!", message, notify);
     }
 
-    public string? ReferenceFor(IpInfo info) =>
-        info.CountryCode != homeCountry() && state.Trusted.TryGetValue(info.CountryCode, out var trusted) ? trusted : null;
+    public static string DescribeReferences(IEnumerable<Reference> references) =>
+        string.Join(", ", references.Select(reference => reference.Label.Length > 0 ? $"{reference.Ip} ({reference.Label})" : reference.Ip));
 
-    public bool IsMismatch(IpInfo info) => ReferenceFor(info) is { } trusted && trusted != info.Ip;
+    public IReadOnlyList<Reference> ReferencesFor(IpInfo info) =>
+        info.CountryCode == homeCountry() ? Array.Empty<Reference>() : state.ReferencesFor(info.CountryCode);
 
-    public void Trust(IpInfo info)
+    public bool IsReference(IpInfo info) => ReferencesFor(info).Any(reference => reference.Ip == info.Ip);
+
+    public bool IsMismatch(IpInfo info)
     {
-        state.Trusted[info.CountryCode] = info.Ip;
+        var references = ReferencesFor(info);
+        return references.Count > 0 && references.All(reference => reference.Ip != info.Ip);
     }
+
+    public bool Trust(IpInfo info, string label = "") =>
+        state.AddReference(new Reference(info.CountryCode, info.Ip, label.Trim()));
 
     private Verdict Decide(IpInfo? info, bool force, DateTime moment)
     {
@@ -182,7 +189,8 @@ public sealed class IpWatcher
                 : new Verdict(Status.Home, "VPN не подключён", place, force);
         }
 
-        if (!state.Trusted.TryGetValue(info.CountryCode, out var trusted))
+        var references = state.ReferencesFor(info.CountryCode);
+        if (references.Count == 0)
         {
             var pending = force || previous != Status.NoReference || state.LastIp != info.Ip;
             return new Verdict(
@@ -192,19 +200,22 @@ public sealed class IpWatcher
                 pending);
         }
 
-        if (trusted == info.Ip)
+        var match = references.FirstOrDefault(reference => reference.Ip == info.Ip);
+        if (match is not null)
         {
             var notify = force
                 || previous != Status.Unchanged
-                || state.LastCountryCode != info.CountryCode;
-            return new Verdict(Status.Unchanged, "Готов к работе", $"{place}. IP совпадает с эталонным", notify);
+                || state.LastCountryCode != info.CountryCode
+                || state.LastIp != info.Ip;
+            var label = match.Label.Length > 0 ? $" ({match.Label})" : "";
+            return new Verdict(Status.Unchanged, "Готов к работе", $"{place}. IP совпадает с эталонным{label}", notify);
         }
 
         var alert = force || previous != Status.Changed || state.LastIp != info.Ip;
         return new Verdict(
             Status.Changed,
             "IP отличается от эталонного!",
-            $"Сейчас: {place}. Эталонный IP: {trusted}",
+            $"Сейчас: {place}. {(references.Count == 1 ? "Эталонный IP" : "Эталонные IP")}: {DescribeReferences(references)}",
             alert);
     }
 

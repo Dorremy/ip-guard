@@ -34,6 +34,7 @@ public sealed class TrayApp : ApplicationContext
     private int networkBurst;
     private bool rerun;
     private bool settingsOpen;
+    private bool referencesOpen;
 
     public TrayApp()
     {
@@ -45,6 +46,7 @@ public sealed class TrayApp : ApplicationContext
         settings = settingsStore.Load();
         Sounds.Volume = settings.SoundVolume;
         state = stateStore.Load();
+        state.MigrateLegacy();
         watcher = new IpWatcher(
             state,
             () => settings.HomeCountryCode,
@@ -121,6 +123,9 @@ public sealed class TrayApp : ApplicationContext
 
         var quietMenu = BuildQuietMenu();
 
+        var referencesItem = new ToolStripMenuItem("Эталоны...");
+        referencesItem.Click += (_, _) => ShowReferences();
+
         var settingsItem = new ToolStripMenuItem("Настройки...");
         settingsItem.Click += async (_, _) => await ShowSettingsAsync();
 
@@ -159,6 +164,7 @@ public sealed class TrayApp : ApplicationContext
             home,
             history,
             quietMenu,
+            referencesItem,
             settingsItem,
             new ToolStripSeparator(),
             folder,
@@ -233,6 +239,34 @@ public sealed class TrayApp : ApplicationContext
         stop.Enabled = quiet.Active;
     }
 
+    private void ShowReferences()
+    {
+        if (referencesOpen)
+        {
+            return;
+        }
+
+        referencesOpen = true;
+        try
+        {
+            using var form = new ReferencesForm(
+                state,
+                () => monitor.Current,
+                () => settings.HomeCountryCode,
+                () =>
+                {
+                    Persist();
+                    journal.Write("Список эталонов изменён");
+                    _ = CheckAsync(true, 1, "эталоны");
+                });
+            form.ShowDialog();
+        }
+        finally
+        {
+            referencesOpen = false;
+        }
+    }
+
     private async Task ShowSettingsAsync()
     {
         if (settingsOpen)
@@ -272,8 +306,10 @@ public sealed class TrayApp : ApplicationContext
         var current = monitor.Current;
         if (current is not null && current.CountryCode != settings.HomeCountryCode)
         {
-            watcher.Trust(current);
-            journal.Write($"Эталон для {current.CountryCode}: {current.Ip}");
+            var added = watcher.Trust(current);
+            journal.Write(added
+                ? $"Эталон добавлен для {current.CountryCode}: {current.Ip}"
+                : $"Эталон уже был для {current.CountryCode}: {current.Ip}");
             await CheckAsync(true, 1, "новый эталон");
         }
     }
@@ -444,9 +480,11 @@ public sealed class TrayApp : ApplicationContext
         reference.Visible = abroad;
         if (abroad)
         {
-            reference.Text = state.Trusted.TryGetValue(info!.CountryCode, out var trusted)
-                ? $"Эталон для {info.CountryCode}: {trusted}"
-                : $"Эталон для {info.CountryCode} не задан";
+            var references = state.ReferencesFor(info!.CountryCode);
+            var text = references.Count == 0
+                ? $"Эталон для {info.CountryCode} не задан"
+                : $"{(references.Count == 1 ? "Эталон" : "Эталоны")} для {info.CountryCode}: {IpWatcher.DescribeReferences(references)}";
+            reference.Text = text.Length > 70 ? text[..69] + "…" : text;
         }
 
         var alarm = verdict.Status is Status.Changed or Status.Leak;

@@ -8,9 +8,10 @@ public sealed class HistoryForm : Form
         Size = new Size(1180, 480);
         StartPosition = FormStartPosition.CenterScreen;
 
-        var trusted = state.Trusted.Count == 0
+        state.MigrateLegacy();
+        var trusted = state.References.Count == 0
             ? "Эталонных IP пока нет"
-            : "Эталонные IP: " + string.Join(";  ", state.Trusted.Select(p => $"{p.Key} — {p.Value}"));
+            : "Эталонные IP: " + string.Join(";  ", state.References.Select(r => $"{r.Country} — {IpWatcher.DescribeReferences(new[] { r })}"));
         var summary = new Label
         {
             Dock = DockStyle.Top,
