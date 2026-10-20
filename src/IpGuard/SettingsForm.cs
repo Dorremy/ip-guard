@@ -26,6 +26,7 @@ public sealed class SettingsForm : Form
     private readonly CheckBox statusBox = new() { Text = "Отдавать статус скриптам на этом компьютере", AutoSize = true };
     private readonly NumericUpDown statusPort = new() { Minimum = MinPort, Maximum = MaxPort, Width = 80 };
     private readonly Label statusHint = new() { AutoSize = true, ForeColor = SystemColors.GrayText };
+    private readonly CheckBox updatesBox = new() { Text = "Проверять наличие новой версии раз в сутки (запрос к GitHub)", AutoSize = true };
     private readonly TrackBar volume = new() { Minimum = 0, Maximum = 100, TickFrequency = 10, Width = 260, Height = 36 };
     private readonly Dictionary<string, ComboBox> variants = new();
     private readonly Button save = new() { Text = "Сохранить", AutoSize = true, DialogResult = DialogResult.OK };
@@ -60,6 +61,7 @@ public sealed class SettingsForm : Form
         root.Controls.Add(Group("Проверки", direct, ipv6, Row("Сообщать о потере связи", outage)));
         root.Controls.Add(Group("Уведомления", alertWindow, soundBox, Row("Громкость", volume), VariantRows()));
         root.Controls.Add(Group("Для скриптов", statusBox, Row("Порт", statusPort), statusHint));
+        root.Controls.Add(Group("Обновления", updatesBox));
 
         var buttons = new FlowLayoutPanel
         {
@@ -114,6 +116,7 @@ public sealed class SettingsForm : Form
         alertWindow.Checked = working.AlertWindow;
         soundBox.Checked = working.SoundEnabled;
         volume.Value = Math.Clamp(working.SoundVolume, 0, 100);
+        updatesBox.Checked = working.UpdateCheckEnabled;
         statusBox.Checked = working.StatusServerEnabled;
         statusPort.Value = ClampPort(working.StatusPort);
         UpdateStatusHint();
@@ -137,6 +140,7 @@ public sealed class SettingsForm : Form
         working.AlertWindow = alertWindow.Checked;
         working.SoundEnabled = soundBox.Checked;
         working.SoundVolume = volume.Value;
+        working.UpdateCheckEnabled = updatesBox.Checked;
         working.StatusServerEnabled = statusBox.Checked;
         working.StatusPort = ClampPort((int)statusPort.Value);
         foreach (var (key, box) in variants)

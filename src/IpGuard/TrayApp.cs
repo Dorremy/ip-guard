@@ -39,6 +39,10 @@ public sealed class TrayApp : ApplicationContext
     private readonly string statusPath;
     private StatusSnapshot? lastSnapshot;
     private int statusPortInUse;
+    private readonly UpdateChecker updates = new();
+    private readonly System.Windows.Forms.Timer updateTimer = new() { Interval = 60 * 60 * 1000 };
+    private readonly ToolStripMenuItem updateAvailable = new("") { Visible = false };
+    private ReleaseInfo? availableRelease;
 
     public TrayApp()
     {
@@ -83,6 +87,9 @@ public sealed class TrayApp : ApplicationContext
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
 
         ApplyStatusServer();
+        updateTimer.Tick += async (_, _) => await CheckUpdatesAsync(false);
+        updateTimer.Start();
+        _ = Task.Delay(TimeSpan.FromSeconds(90)).ContinueWith(_ => ui.Post(async _ => await CheckUpdatesAsync(false), null));
         journal.Write($"Запуск, версия {Application.ProductVersion.Split('+')[0]}");
         _ = CheckAsync(true, 5, "запуск");
     }
@@ -93,6 +100,7 @@ public sealed class TrayApp : ApplicationContext
         PublishStatus(new StatusSnapshot(false, "stopped", "IpGuard закрыт", "Программа не запущена, статус не обновляется", null, null, null, null, Array.Empty<string>(), null, DateTime.UtcNow, ProductVersion()));
         statusServer.Dispose();
         quietTimer.Dispose();
+        updateTimer.Dispose();
         alertForm?.Dispose();
         NetworkChange.NetworkAddressChanged -= OnNetworkChanged;
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
@@ -144,6 +152,11 @@ public sealed class TrayApp : ApplicationContext
             Process.Start(new ProcessStartInfo("explorer.exe", dataDir) { UseShellExecute = true });
         };
 
+        updateAvailable.Click += (_, _) => OpenUpdatePage();
+
+        var checkUpdates = new ToolStripMenuItem("Проверить обновления");
+        checkUpdates.Click += async (_, _) => await CheckUpdatesAsync(true);
+
         var version = new ToolStripMenuItem($"Версия {Application.ProductVersion.Split('+')[0]}") { Enabled = false };
 
         var log = new ToolStripMenuItem("Открыть журнал");
@@ -178,6 +191,8 @@ public sealed class TrayApp : ApplicationContext
             folder,
             log,
             new ToolStripSeparator(),
+            updateAvailable,
+            checkUpdates,
             version,
             exit
         });
@@ -483,6 +498,60 @@ public sealed class TrayApp : ApplicationContext
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
         }
+    }
+
+    private async Task CheckUpdatesAsync(bool manual)
+    {
+        if (!manual && (!settings.UpdateCheckEnabled || !UpdateChecker.ShouldCheck(settings.LastUpdateCheckUtc, DateTime.UtcNow)))
+        {
+            return;
+        }
+
+        var latest = await updates.LatestAsync();
+        var current = Versions.Parse(ProductVersion()) ?? new Version(0, 0, 0);
+        var outcome = UpdateChecker.Evaluate(latest, current, settings.NotifiedUpdate, manual);
+        var show = outcome.Notify && (manual || !quiet.Active);
+        if (outcome.Failed)
+        {
+            journal.Write("Проверка обновлений: не удалось получить ответ");
+        }
+        else
+        {
+            settings.LastUpdateCheckUtc = DateTime.UtcNow;
+            availableRelease = outcome.Available;
+            updateAvailable.Visible = outcome.Available is not null;
+            if (outcome.Available is { } release)
+            {
+                updateAvailable.Text = $"Доступна версия {release.Tag}...";
+                journal.Write($"Проверка обновлений: доступна {release.Tag}");
+                if (show)
+                {
+                    settings.NotifiedUpdate = release.Tag;
+                }
+            }
+            else
+            {
+                journal.Write("Проверка обновлений: установлена последняя версия");
+            }
+
+            SaveSettings();
+        }
+
+        if (show)
+        {
+            tray.ShowBalloonTip(6000, "IpGuard", outcome.Message, outcome.Failed ? ToolTipIcon.Warning : ToolTipIcon.Info);
+        }
+    }
+
+    private void OpenUpdatePage()
+    {
+        if (availableRelease is null)
+        {
+            return;
+        }
+
+        var url = UpdateChecker.IsSafeUrl(availableRelease.Url) ? availableRelease.Url : UpdateChecker.FallbackPage;
+        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
     }
 
     private static string ProductVersion() => Application.ProductVersion.Split('+')[0];

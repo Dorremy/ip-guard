@@ -83,6 +83,9 @@ public sealed class Settings
     public int SoundVolume { get; set; } = 100;
     public bool StatusServerEnabled { get; set; } = false;
     public int StatusPort { get; set; } = 47831;
+    public bool UpdateCheckEnabled { get; set; } = true;
+    public DateTime? LastUpdateCheckUtc { get; set; }
+    public string NotifiedUpdate { get; set; } = "";
     public Dictionary<string, int> Sounds { get; set; } = new();
 
     public void CopyFrom(Settings other)
@@ -97,6 +100,9 @@ public sealed class Settings
         SoundVolume = other.SoundVolume;
         StatusServerEnabled = other.StatusServerEnabled;
         StatusPort = other.StatusPort;
+        UpdateCheckEnabled = other.UpdateCheckEnabled;
+        LastUpdateCheckUtc = other.LastUpdateCheckUtc;
+        NotifiedUpdate = other.NotifiedUpdate;
         Sounds = new Dictionary<string, int>(other.Sounds);
     }
 
