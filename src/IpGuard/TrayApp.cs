@@ -31,9 +31,9 @@ public sealed class TrayApp : ApplicationContext
     private AlertForm? alertForm;
     private readonly QuietMode quiet = new();
     private readonly System.Windows.Forms.Timer quietTimer = new();
-    private ToolStripMenuItem? quietRoot;
     private int networkBurst;
     private bool rerun;
+    private bool settingsOpen;
 
     public TrayApp()
     {
@@ -43,6 +43,7 @@ public sealed class TrayApp : ApplicationContext
         stateStore = new JsonStore<MonitorState>(Path.Combine(dataDir, "state.json"));
         journal = new Journal(Path.Combine(dataDir, "log.txt"));
         settings = settingsStore.Load();
+        Sounds.Volume = settings.SoundVolume;
         state = stateStore.Load();
         watcher = new IpWatcher(
             state,
@@ -118,29 +119,10 @@ public sealed class TrayApp : ApplicationContext
         var history = new ToolStripMenuItem("История...");
         history.Click += (_, _) => ShowHistory();
 
-        var alertSwitch = new ToolStripMenuItem("Окно тревоги")
-        {
-            CheckOnClick = true,
-            Checked = settings.AlertWindow
-        };
-        alertSwitch.CheckedChanged += (_, _) =>
-        {
-            settings.AlertWindow = alertSwitch.Checked;
-            SaveSettings();
-            journal.Write($"Окно тревоги: {(alertSwitch.Checked ? "включено" : "выключено")}");
-        };
-
         var quietMenu = BuildQuietMenu();
-        var outageMenu = BuildOutageMenu();
-        var sounds = BuildSoundMenu();
-        var leaks = BuildLeakMenu();
 
-        var autostart = new ToolStripMenuItem("Запускать вместе с Windows")
-        {
-            CheckOnClick = true,
-            Checked = Autostart.IsEnabled()
-        };
-        autostart.CheckedChanged += (_, _) => Autostart.Set(autostart.Checked);
+        var settingsItem = new ToolStripMenuItem("Настройки...");
+        settingsItem.Click += async (_, _) => await ShowSettingsAsync();
 
         var folder = new ToolStripMenuItem("Открыть папку с данными");
         folder.Click += (_, _) =>
@@ -177,12 +159,8 @@ public sealed class TrayApp : ApplicationContext
             home,
             history,
             quietMenu,
-            outageMenu,
-            sounds,
-            leaks,
-            alertSwitch,
+            settingsItem,
             new ToolStripSeparator(),
-            autostart,
             folder,
             log,
             new ToolStripSeparator(),
@@ -190,102 +168,6 @@ public sealed class TrayApp : ApplicationContext
             exit
         });
         return menu;
-    }
-
-    private ToolStripMenuItem BuildSoundMenu()
-    {
-        var root = new ToolStripMenuItem("Звуки");
-        var done = new ToolStripMenuItem("Готово");
-        KeepOpenOnChoice(root.DropDown, item => item != done);
-
-        var enabled = new ToolStripMenuItem("Включены")
-        {
-            CheckOnClick = true,
-            Checked = settings.SoundEnabled
-        };
-        enabled.CheckedChanged += (_, _) =>
-        {
-            settings.SoundEnabled = enabled.Checked;
-            SaveSettings();
-        };
-        root.DropDownItems.Add(enabled);
-        root.DropDownItems.Add(new ToolStripSeparator());
-
-        foreach (var (key, title, names) in Sounds.Kinds)
-        {
-            var kind = new ToolStripMenuItem(title);
-            KeepOpenOnChoice(kind.DropDown, _ => true);
-            for (var variant = 1; variant <= Sounds.Variants; variant++)
-            {
-                var number = variant;
-                var item = new ToolStripMenuItem(names[number - 1]) { Checked = settings.SoundVariant(key) == number };
-                item.Click += (_, _) =>
-                {
-                    settings.Sounds[key] = number;
-                    SaveSettings();
-                    foreach (ToolStripMenuItem sibling in kind.DropDownItems)
-                    {
-                        sibling.Checked = sibling == item;
-                    }
-
-                    Sounds.Play(key, number);
-                };
-                kind.DropDownItems.Add(item);
-            }
-
-            root.DropDownItems.Add(kind);
-        }
-
-        root.DropDownItems.Add(new ToolStripSeparator());
-        root.DropDownItems.Add(done);
-        return root;
-    }
-
-    private static void KeepOpenOnChoice(ToolStripDropDown dropDown, Func<ToolStripItem, bool> keepOpen)
-    {
-        dropDown.Closing += (_, e) =>
-        {
-            var selected = dropDown.Items.Cast<ToolStripItem>().FirstOrDefault(item => item.Selected);
-            e.Cancel = e.CloseReason == ToolStripDropDownCloseReason.ItemClicked
-                && selected is not null
-                && keepOpen(selected);
-        };
-    }
-
-    private ToolStripMenuItem BuildLeakMenu()
-    {
-        var root = new ToolStripMenuItem("Проверки утечек");
-        KeepOpenOnChoice(root.DropDown, _ => true);
-
-        var direct = new ToolStripMenuItem("Прямой маршрут (без прокси)")
-        {
-            CheckOnClick = true,
-            Checked = settings.CheckDirectRoute
-        };
-        direct.CheckedChanged += async (_, _) =>
-        {
-            settings.CheckDirectRoute = direct.Checked;
-            SaveSettings();
-            journal.Write($"Проверка прямого маршрута: {(direct.Checked ? "включена" : "выключена")}");
-            await CheckAsync(true, 1, "настройки");
-        };
-
-        var ipv6 = new ToolStripMenuItem("IPv6")
-        {
-            CheckOnClick = true,
-            Checked = settings.CheckIpv6
-        };
-        ipv6.CheckedChanged += async (_, _) =>
-        {
-            settings.CheckIpv6 = ipv6.Checked;
-            SaveSettings();
-            journal.Write($"Проверка IPv6: {(ipv6.Checked ? "включена" : "выключена")}");
-            await CheckAsync(true, 1, "настройки");
-        };
-
-        root.DropDownItems.Add(direct);
-        root.DropDownItems.Add(ipv6);
-        return root;
     }
 
     private void SaveSettings()
@@ -299,35 +181,9 @@ public sealed class TrayApp : ApplicationContext
         }
     }
 
-    private ToolStripMenuItem BuildOutageMenu()
-    {
-        var root = new ToolStripMenuItem("Сообщать о потере связи");
-        KeepOpenOnChoice(root.DropDown, _ => true);
-        var choices = new (int Seconds, string Title)[] { (0, "Сразу"), (15, "Через 15 секунд"), (30, "Через 30 секунд"), (60, "Через минуту") };
-
-        foreach (var (seconds, title) in choices)
-        {
-            var item = new ToolStripMenuItem(title) { Checked = settings.OutageSeconds == seconds };
-            item.Click += (_, _) =>
-            {
-                settings.OutageSeconds = seconds;
-                SaveSettings();
-                journal.Write($"Сообщать о потере связи: {title.ToLowerInvariant()}");
-                foreach (ToolStripMenuItem sibling in root.DropDownItems)
-                {
-                    sibling.Checked = sibling == item;
-                }
-            };
-            root.DropDownItems.Add(item);
-        }
-
-        return root;
-    }
-
     private ToolStripMenuItem BuildQuietMenu()
     {
         var root = new ToolStripMenuItem(quiet.Title);
-        quietRoot = root;
         var stop = new ToolStripMenuItem("Выключить") { Enabled = false };
 
         void Apply(TimeSpan? duration)
@@ -375,6 +231,40 @@ public sealed class TrayApp : ApplicationContext
     {
         root.Text = quiet.Title;
         stop.Enabled = quiet.Active;
+    }
+
+    private async Task ShowSettingsAsync()
+    {
+        if (settingsOpen)
+        {
+            return;
+        }
+
+        settingsOpen = true;
+        try
+        {
+            using var form = new SettingsForm(settings, Autostart.IsEnabled());
+            if (form.ShowDialog() != DialogResult.OK)
+            {
+                return;
+            }
+
+            settings.CopyFrom(form.Result);
+            Sounds.Volume = settings.SoundVolume;
+            SaveSettings();
+            pollTimer.Interval = Math.Max(15, settings.IntervalSeconds) * 1000;
+            if (form.AutostartResult != Autostart.IsEnabled())
+            {
+                Autostart.Set(form.AutostartResult);
+            }
+
+            journal.Write("Настройки сохранены");
+            await CheckAsync(true, 1, "настройки");
+        }
+        finally
+        {
+            settingsOpen = false;
+        }
     }
 
     private async Task AcceptCurrentAsReferenceAsync()
