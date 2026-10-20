@@ -340,7 +340,14 @@ public sealed class TrayApp : ApplicationContext
             return;
         }
 
-        historyForm = new HistoryForm(state, settings.HomeCountryCode);
+        historyForm = new HistoryForm(
+            state,
+            () => settings.HomeCountryCode,
+            () =>
+            {
+                Persist();
+                journal.Write("История очищена");
+            });
         historyForm.FormClosed += (_, _) => historyForm = null;
         historyForm.Show();
     }
@@ -471,6 +478,11 @@ public sealed class TrayApp : ApplicationContext
 
     private void Show(Verdict verdict, IpInfo? info)
     {
+        if (historyForm is { IsDisposed: false })
+        {
+            historyForm.Reload();
+        }
+
         tray.Icon = TrayIcons.For(verdict.Status);
         var tip = info is null ? "IpGuard: нет связи" : $"{info.CountryCode} {info.Ip} — {Labels.For(verdict.Status)}";
         tray.Text = tip.Length > 63 ? tip[..63] : tip;
