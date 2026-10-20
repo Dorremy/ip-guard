@@ -145,6 +145,8 @@ public sealed class TrayApp : ApplicationContext
         var referencesItem = new ToolStripMenuItem("Эталоны...");
         referencesItem.Click += (_, _) => ShowReferences();
 
+        var backupItem = BuildBackupMenu();
+
         var settingsItem = new ToolStripMenuItem("Настройки...");
         settingsItem.Click += async (_, _) => await ShowSettingsAsync();
 
@@ -190,6 +192,7 @@ public sealed class TrayApp : ApplicationContext
             quietMenu,
             referencesItem,
             settingsItem,
+            backupItem,
             new ToolStripSeparator(),
             folder,
             log,
@@ -263,6 +266,108 @@ public sealed class TrayApp : ApplicationContext
     {
         root.Text = quiet.Title;
         stop.Enabled = quiet.Active;
+    }
+
+    private ToolStripMenuItem BuildBackupMenu()
+    {
+        var root = new ToolStripMenuItem("Резервная копия настроек");
+
+        var export = new ToolStripMenuItem("Сохранить в файл...");
+        export.Click += (_, _) => ExportBackup();
+
+        var import = new ToolStripMenuItem("Загрузить из файла...");
+        import.Click += async (_, _) => await ImportBackupAsync();
+
+        root.DropDownItems.Add(export);
+        root.DropDownItems.Add(import);
+        return root;
+    }
+
+    private void ExportBackup()
+    {
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Сохранить настройки",
+            Filter = "Резервная копия IpGuard (*.json)|*.json",
+            FileName = $"ipguard-settings-{DateTime.Now:yyyyMMdd}.json"
+        };
+        if (dialog.ShowDialog() != DialogResult.OK)
+        {
+            return;
+        }
+
+        state.MigrateLegacy();
+        try
+        {
+            File.WriteAllText(dialog.FileName, SettingsBackup.Export(settings, state.References), new System.Text.UTF8Encoding(true));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show($"Не удалось сохранить файл: {e.Message}", "IpGuard", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        journal.Write($"Настройки сохранены в файл: {dialog.FileName}");
+        tray.ShowBalloonTip(4000, "IpGuard", "Настройки и эталоны сохранены в файл", ToolTipIcon.Info);
+    }
+
+    private async Task ImportBackupAsync()
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Загрузить настройки",
+            Filter = "Резервная копия IpGuard (*.json)|*.json|Все файлы (*.*)|*.*",
+            CheckFileExists = true
+        };
+        if (dialog.ShowDialog() != DialogResult.OK)
+        {
+            return;
+        }
+
+        string text;
+        try
+        {
+            if (new FileInfo(dialog.FileName).Length > SettingsBackup.MaxBytes)
+            {
+                MessageBox.Show("Файл слишком большой для резервной копии настроек.", "IpGuard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            text = File.ReadAllText(dialog.FileName);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show($"Не удалось прочитать файл: {e.Message}", "IpGuard", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        var result = SettingsBackup.Import(text);
+        if (result.Data is not { } data)
+        {
+            MessageBox.Show(result.Error, "IpGuard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (MessageBox.Show(SettingsBackup.Describe(result), "Загрузка настроек", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+        {
+            return;
+        }
+
+        settings.CopyFrom(data.Settings);
+        state.Trusted.Clear();
+        state.References.Clear();
+        foreach (var reference in data.References)
+        {
+            state.AddReference(reference);
+        }
+
+        Sounds.Volume = settings.SoundVolume;
+        pollTimer.Interval = Math.Max(15, settings.IntervalSeconds) * 1000;
+        SaveSettings();
+        Persist();
+        ApplyStatusServer();
+        journal.Write($"Настройки загружены из файла: {dialog.FileName}; эталонов: {data.References.Count}");
+        await CheckAsync(true, 1, "импорт");
     }
 
     private void ShowReferences()
