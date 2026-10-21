@@ -9,28 +9,17 @@ public sealed class NebulaRenderer : IDisposable
 {
     public const int LogicalWidth = NebulaLayout.Width;
     public const int LogicalHeight = NebulaLayout.Height;
-    private const int CurtainWidth = 75;
-    private const int CurtainHeight = 105;
-    private const float CurtainRefresh = 0.12f;
     private const float LinkDistance = 60f;
 
     private static readonly Color Pale = Color.FromArgb(205, 216, 235);
 
-    private readonly int[] curtainPixels = new int[CurtainWidth * CurtainHeight];
-    private readonly Bitmap curtainSmall = new(CurtainWidth, CurtainHeight, PixelFormat.Format32bppArgb);
-    private Bitmap? curtainFull;
-    private float curtainTime = -10f;
-    private float curtainDim = -1f;
-    private byte[] frame = Array.Empty<byte>();
-    private int haloRadius = -1;
-    private int[] halo = Array.Empty<int>();
+    private readonly CurtainCache curtain = new(75, 105);
+    private readonly SwarmPainter painter = new();
+    private readonly PageLayer pageLayer = new();
     private float fontScale = -1f;
     private Font? ipFont;
     private Font? subFont;
     private Font? itemFont;
-    private PageFonts? pageFonts;
-    private Bitmap? pageCache;
-    private (Page? Page, int Rows, int Host, int Argb, bool Caret, int Width, int Height) pageKey;
     private Bitmap? infoCache;
     private string infoKey = "";
     private Bitmap? overlay;
@@ -38,7 +27,6 @@ public sealed class NebulaRenderer : IDisposable
     private Bitmap? glass;
     private GraphicsPath? glassPath;
     private Rectangle glassArea;
-    private int linkWidth = 1;
     private Tone accentTone = Tone.Calm;
 
     public static Color ToneColor(Tone tone) => tone switch
@@ -59,11 +47,9 @@ public sealed class NebulaRenderer : IDisposable
 
         var sx = w / (float)LogicalWidth;
         var sy = h / (float)LogicalHeight;
-        EnsureCurtain(w, h, director.Time, director.Dim);
         using (var g = Graphics.FromImage(target))
         {
-            g.CompositingMode = CompositingMode.SourceCopy;
-            g.DrawImageUnscaled(curtainFull!, 0, 0);
+            curtain.Draw(g, w, h, director.Time, director.Dim);
         }
 
         Splat(target, director, sx, sy);
@@ -83,52 +69,15 @@ public sealed class NebulaRenderer : IDisposable
 
     public void Dispose()
     {
-        curtainSmall.Dispose();
-        curtainFull?.Dispose();
+        curtain.Dispose();
+        pageLayer.Dispose();
         ipFont?.Dispose();
         subFont?.Dispose();
         itemFont?.Dispose();
         infoCache?.Dispose();
-        pageFonts?.Dispose();
-        pageCache?.Dispose();
         overlay?.Dispose();
         glass?.Dispose();
         glassPath?.Dispose();
-    }
-
-    private void EnsureCurtain(int w, int h, float time, float dim)
-    {
-        var resized = curtainFull is null || curtainFull.Width != w || curtainFull.Height != h;
-        if (!resized && Math.Abs(time - curtainTime) < CurtainRefresh && Math.Abs(dim - curtainDim) < 0.005f)
-        {
-            return;
-        }
-
-        if (resized)
-        {
-            curtainFull?.Dispose();
-            curtainFull = new Bitmap(w, h, PixelFormat.Format32bppArgb);
-        }
-
-        Curtain.Fill(MemoryMarshal.Cast<int, uint>(curtainPixels.AsSpan()), CurtainWidth, CurtainHeight, time, dim);
-        var data = curtainSmall.LockBits(new Rectangle(0, 0, CurtainWidth, CurtainHeight), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
-        for (var y = 0; y < CurtainHeight; y++)
-        {
-            Marshal.Copy(curtainPixels, y * CurtainWidth, data.Scan0 + y * data.Stride, CurtainWidth);
-        }
-
-        curtainSmall.UnlockBits(data);
-        using (var g = Graphics.FromImage(curtainFull!))
-        using (var attributes = new ImageAttributes())
-        {
-            attributes.SetWrapMode(WrapMode.TileFlipXY);
-            g.InterpolationMode = InterpolationMode.HighQualityBilinear;
-            g.PixelOffsetMode = PixelOffsetMode.Half;
-            g.DrawImage(curtainSmall, new Rectangle(0, 0, w, h), 0, 0, CurtainWidth, CurtainHeight, GraphicsUnit.Pixel, attributes);
-        }
-
-        curtainTime = time;
-        curtainDim = dim;
     }
 
     private void EnsureFonts(float scale)
@@ -147,42 +96,9 @@ public sealed class NebulaRenderer : IDisposable
         fontScale = scale;
     }
 
-    private void EnsureHalo(float scale)
-    {
-        var radius = Math.Clamp((int)MathF.Round(3.2f * scale), 2, 7);
-        if (radius == haloRadius)
-        {
-            return;
-        }
-
-        haloRadius = radius;
-        var size = radius * 2 + 1;
-        halo = new int[size * size];
-        var sigma = radius / 2.2f;
-        for (var dy = -radius; dy <= radius; dy++)
-        {
-            for (var dx = -radius; dx <= radius; dx++)
-            {
-                var r2 = dx * dx + dy * dy;
-                halo[(dy + radius) * size + dx + radius] = r2 > radius * radius ? 0 : (int)(256f * MathF.Exp(-r2 / (2 * sigma * sigma)));
-            }
-        }
-    }
-
     private void Splat(Bitmap target, IntroDirector d, float sx, float sy)
     {
-        EnsureHalo(sx);
-        var w = target.Width;
-        var h = target.Height;
-        var data = target.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
-        var stride = Math.Abs(data.Stride);
-        var needed = stride * h;
-        if (frame.Length < needed)
-        {
-            frame = new byte[needed];
-        }
-
-        Marshal.Copy(data.Scan0, frame, 0, needed);
+        painter.Begin(target, sx);
         var f = d.Field;
         var time = d.Time;
         var life = Smooth(time / 0.5f);
@@ -193,14 +109,12 @@ public sealed class NebulaRenderer : IDisposable
         var statusColor = Mix(fromColor, toneColor, d.Blend);
         var waveSpeed = d.Checking ? 330f : 140f;
         var dust = d.DustLevel;
-        var radius = haloRadius;
-        var size = radius * 2 + 1;
-        for (var i = 0; i < f.Count; i++)
+        painter.Splat(f, sx, sy, time, i =>
         {
             var b = f.Brightness[i] * life;
             if (b <= 0.01f)
             {
-                continue;
+                return default;
             }
 
             var status = i < IntroDirector.StatusCount;
@@ -234,78 +148,13 @@ public sealed class NebulaRenderer : IDisposable
                 }
             }
 
-            var px = f.X[i] * sx;
-            var py = f.Y[i] * sy;
-            if (driven)
-            {
-                var shimmer = status ? 0.18f : 0.35f;
-                px += shimmer * sx * MathF.Sin(time * 2.1f + i);
-                py += shimmer * sy * MathF.Cos(time * 1.7f + i * 1.3f);
-            }
-
-            var x0 = (int)MathF.Floor(px);
-            var y0 = (int)MathF.Floor(py);
-            var fx = px - x0;
-            var fy = py - y0;
-            var r = c.R * b;
-            var gr = c.G * b;
-            var bl = c.B * b;
-            AddPixel(x0, y0, (1 - fx) * (1 - fy), r, gr, bl, w, h, stride);
-            AddPixel(x0 + 1, y0, fx * (1 - fy), r, gr, bl, w, h, stride);
-            AddPixel(x0, y0 + 1, (1 - fx) * fy, r, gr, bl, w, h, stride);
-            AddPixel(x0 + 1, y0 + 1, fx * fy, r, gr, bl, w, h, stride);
-            var haloGain = status && driven ? 0.22f : 0.35f;
-            var hr = (int)(r * haloGain);
-            var hg = (int)(gr * haloGain);
-            var hb = (int)(bl * haloGain);
-            var cx = (int)MathF.Round(px);
-            var cy = (int)MathF.Round(py);
-            for (var ky = 0; ky < size; ky++)
-            {
-                var yy = cy + ky - radius;
-                if (yy < 0 || yy >= h)
-                {
-                    continue;
-                }
-
-                for (var kx = 0; kx < size; kx++)
-                {
-                    var k = halo[ky * size + kx];
-                    var xx = cx + kx - radius;
-                    if (k == 0 || xx < 0 || xx >= w)
-                    {
-                        continue;
-                    }
-
-                    var idx = yy * stride + xx * 4;
-                    frame[idx] = Sat(frame[idx] + ((hb * k) >> 8));
-                    frame[idx + 1] = Sat(frame[idx + 1] + ((hg * k) >> 8));
-                    frame[idx + 2] = Sat(frame[idx + 2] + ((hr * k) >> 8));
-                }
-            }
-        }
-
-        DrawLinks(d, sx, sy, w, h, stride);
-        Marshal.Copy(frame, 0, data.Scan0, needed);
-        target.UnlockBits(data);
+            return new Dot(b, c, status && driven ? 0.22f : 0.35f, driven ? (status ? 0.18f : 0.35f) : 0f);
+        });
+        DrawLinks(d, sx, sy);
+        painter.End();
     }
 
-    private void AddPixel(int x, int y, float weight, float r, float g, float b, int w, int h, int stride)
-    {
-        if (x < 0 || y < 0 || x >= w || y >= h || weight <= 0f)
-        {
-            return;
-        }
-
-        var idx = y * stride + x * 4;
-        frame[idx] = Sat(frame[idx] + (int)(b * weight));
-        frame[idx + 1] = Sat(frame[idx + 1] + (int)(g * weight));
-        frame[idx + 2] = Sat(frame[idx + 2] + (int)(r * weight));
-    }
-
-    private static byte Sat(int v) => v > 255 ? (byte)255 : (byte)v;
-
-    private void DrawLinks(IntroDirector d, float sx, float sy, int w, int h, int stride)
+    private void DrawLinks(IntroDirector d, float sx, float sy)
     {
         var level = d.LinkLevel;
         if (level <= 0.01f)
@@ -316,7 +165,7 @@ public sealed class NebulaRenderer : IDisposable
         var f = d.Field;
         var roam = d.Roamers;
         var limit = LinkDistance * sx;
-        linkWidth = sx >= 1.5f ? 2 : 1;
+        var thickness = sx >= 1.5f ? 2 : 1;
         for (var a = 0; a < roam.Count; a++)
         {
             var ax = f.X[roam[a]] * sx;
@@ -332,43 +181,10 @@ public sealed class NebulaRenderer : IDisposable
                 }
 
                 var alpha = (int)(130f * (1f - dist / limit) * level);
-                if (alpha < 4)
+                if (alpha >= 4)
                 {
-                    continue;
+                    painter.Line(ax, ay, dx, dy, alpha, thickness);
                 }
-
-                Line(ax, ay, dx, dy, alpha, w, h, stride);
-            }
-        }
-    }
-
-    private void Line(float x0, float y0, float dx, float dy, int alpha, int w, int h, int stride)
-    {
-        var steps = (int)MathF.Max(MathF.Abs(dx), MathF.Abs(dy));
-        if (steps < 1)
-        {
-            return;
-        }
-
-        var sxs = dx / steps;
-        var sys = dy / steps;
-        var x = x0;
-        var y = y0;
-        for (var i = 0; i <= steps; i++, x += sxs, y += sys)
-        {
-            for (var t = 0; t < linkWidth; t++)
-            {
-                var px = (int)x;
-                var py = (int)y + t;
-                if (px < 0 || py < 0 || px >= w || py >= h)
-                {
-                    continue;
-                }
-
-                var idx = py * stride + px * 4;
-                frame[idx] = (byte)(frame[idx] + (((238 - frame[idx]) * alpha) >> 8));
-                frame[idx + 1] = (byte)(frame[idx + 1] + (((208 - frame[idx + 1]) * alpha) >> 8));
-                frame[idx + 2] = (byte)(frame[idx + 2] + (((190 - frame[idx + 2]) * alpha) >> 8));
             }
         }
     }
@@ -408,18 +224,7 @@ public sealed class NebulaRenderer : IDisposable
         DrawFaded(g, infoCache, new Rectangle((int)(10 * sx), (int)((NebulaLayout.IpY - 15) * sy), width, height), alpha);
     }
 
-    private static void DrawFaded(Graphics g, Bitmap image, Rectangle dest, float alpha)
-    {
-        if (alpha >= 0.995f)
-        {
-            g.DrawImageUnscaled(image, dest.Location);
-            return;
-        }
-
-        using var attributes = new ImageAttributes();
-        attributes.SetColorMatrix(new ColorMatrix { Matrix33 = alpha });
-        g.DrawImage(image, dest, 0, 0, image.Width, image.Height, GraphicsUnit.Pixel, attributes);
-    }
+    private static void DrawFaded(Graphics g, Bitmap image, Rectangle dest, float alpha) => Gfx.DrawFaded(g, image, dest, alpha);
 
     private void DrawMenu(Graphics g, Bitmap target, IntroDirector d, MenuModel menu, PageHost? pages, bool caretOn, float sx, float sy)
     {
@@ -500,33 +305,8 @@ public sealed class NebulaRenderer : IDisposable
         g.ResetClip();
     }
 
-    private void DrawPage(Graphics g, Page page, PageHost pages, bool caretOn, float appear, float sx, float sy)
-    {
-        if (pageFonts is null || Math.Abs(pageFonts.Scale - sx) > 0.001f)
-        {
-            pageFonts?.Dispose();
-            pageFonts = new PageFonts(sx);
-            pageCache?.Dispose();
-            pageCache = null;
-        }
-
-        var accent = ToneColor(accentTone);
-        var width = Math.Max(1, (int)(PageGeometry.Area.Width * sx));
-        var height = Math.Max(1, (int)(PageGeometry.Area.Height * sy));
-        var focusText = page.Rows.Focus >= 0 && page.Rows.Focus < page.Rows.Rows.Count && page.Rows.Rows[page.Rows.Focus] is TextRow;
-        var key = (page, page.Rows.Version, pages.Version, accent.ToArgb(), caretOn && focusText, width, height);
-        if (pageCache is null || key != pageKey)
-        {
-            pageCache?.Dispose();
-            pageCache = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-            pageKey = key;
-            using var pg = Graphics.FromImage(pageCache);
-            PageDrawing.Render(pg, page, pages, accent, caretOn && focusText, sx, sy, pageFonts);
-        }
-
-        var alpha = Math.Clamp(appear * pages.ContentAlpha, 0f, 1f);
-        DrawFaded(g, pageCache, new Rectangle((int)(PageGeometry.Area.X * sx), (int)(PageGeometry.Area.Y * sy), width, height), alpha);
-    }
+    private void DrawPage(Graphics g, Page page, PageHost pages, bool caretOn, float appear, float sx, float sy) =>
+        pageLayer.Draw(g, pages, page, ToneColor(accentTone), caretOn, appear * pages.ContentAlpha, sx, sy);
 
     private static Rectangle LerpRect(Rectangle a, Rectangle b, float t)
     {
@@ -580,33 +360,9 @@ public sealed class NebulaRenderer : IDisposable
         }
     }
 
-    private static GraphicsPath Rounded(RectangleF r, float radius)
-    {
-        var d = Math.Min(radius * 2, Math.Min(r.Width, r.Height));
-        var path = new GraphicsPath();
-        if (d <= 0.5f)
-        {
-            path.AddRectangle(r);
-            return path;
-        }
+    private static GraphicsPath Rounded(RectangleF r, float radius) => Gfx.Rounded(r, radius);
 
-        path.AddArc(r.X, r.Y, d, d, 180, 90);
-        path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
-        path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
-        path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
-        path.CloseFigure();
-        return path;
-    }
+    private static Color Mix(Color a, Color b, float t) => Gfx.Mix(a, b, t);
 
-    private static Color Mix(Color a, Color b, float t)
-    {
-        var k = Math.Clamp(t, 0f, 1f);
-        return Color.FromArgb((int)(a.R + (b.R - a.R) * k), (int)(a.G + (b.G - a.G) * k), (int)(a.B + (b.B - a.B) * k));
-    }
-
-    private static float Smooth(float x)
-    {
-        var t = Math.Clamp(x, 0f, 1f);
-        return t * t * (3f - 2f * t);
-    }
+    private static float Smooth(float x) => Gfx.Smooth(x);
 }

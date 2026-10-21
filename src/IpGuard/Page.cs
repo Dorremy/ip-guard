@@ -28,6 +28,10 @@ public abstract class Page
     {
     }
 
+    public virtual void OnTick(double now)
+    {
+    }
+
     public virtual bool OnBack() => true;
 }
 
@@ -44,6 +48,53 @@ public sealed class PageHost
     private int footerPressed = -1;
     private bool backHover;
     private bool backPressed;
+    private bool closeHover;
+    private bool closePressed;
+
+    public PageHost(PageFrame? frame = null)
+    {
+        Frame = frame ?? PageFrame.Panel;
+    }
+
+    public PageFrame Frame { get; }
+
+    public bool BackClosesRoot { get; init; } = true;
+
+    public bool ShowClose { get; init; }
+
+    public bool CanGoBack => stack.Count > 1 || BackClosesRoot;
+
+    public event Action? CloseRequested;
+
+    public void RequestClose() => CloseRequested?.Invoke();
+
+    public void Tick(double now) => Current?.OnTick(now);
+
+    public bool CloseHover
+    {
+        get => closeHover;
+        set
+        {
+            if (value != closeHover)
+            {
+                closeHover = value;
+                Version++;
+            }
+        }
+    }
+
+    public bool ClosePressed
+    {
+        get => closePressed;
+        set
+        {
+            if (value != closePressed)
+            {
+                closePressed = value;
+                Version++;
+            }
+        }
+    }
 
     public IReadOnlyList<Page> Stack => stack;
 
@@ -114,7 +165,7 @@ public sealed class PageHost
     public void Push(Page page)
     {
         page.Host = this;
-        PageGeometry.Layout(page);
+        Frame.Layout(page);
         stack.Add(page);
         entry = 0f;
         ResetFooter();
@@ -126,7 +177,7 @@ public sealed class PageHost
     public bool Pop()
     {
         var page = Current;
-        if (page is null || !page.OnBack())
+        if (page is null || !CanGoBack || !page.OnBack())
         {
             return false;
         }
@@ -137,7 +188,7 @@ public sealed class PageHost
         ResetFooter();
         if (Current is { } revealed)
         {
-            PageGeometry.Layout(revealed);
+            Frame.Layout(revealed);
             revealed.OnShown();
         }
 
@@ -216,6 +267,8 @@ public sealed class PageHost
         footerPressed = -1;
         backHover = false;
         backPressed = false;
+        closeHover = false;
+        closePressed = false;
     }
 
     private static float EaseOut(float t)

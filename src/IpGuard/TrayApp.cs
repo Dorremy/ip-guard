@@ -273,8 +273,31 @@ public sealed class TrayApp : ApplicationContext
         GetCurrentIp = () => monitor.Current,
         GetHome = () => settings.HomeCountryCode,
         GetPrograms = ProgramCloser.RunningWithWindows,
-        PlaySound = (key, variant, level) => Sounds.Play(key, variant, level)
+        PlaySound = (key, variant, level) => Sounds.Play(key, variant, level),
+        GetHistory = () => state.History,
+        ClearHistory = () =>
+        {
+            state.History.Clear();
+            Persist();
+            journal.Write("История очищена");
+        },
+        PickSavePath = AskHistoryPath,
+        HistoryStamp = () => HashCode.Combine(state.History.Count, state.History.Count > 0 ? state.History[^1].Time : default),
+        ReadJournal = () => journal.Tail(2000),
+        JournalStamp = journal.Stamp,
+        OpenJournalFile = OpenJournal
     };
+
+    private static string? AskHistoryPath()
+    {
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Экспорт истории",
+            Filter = "CSV (*.csv)|*.csv",
+            FileName = $"ipguard-history-{DateTime.Now:yyyyMMdd}.csv"
+        };
+        return dialog.ShowDialog() == DialogResult.OK ? dialog.FileName : null;
+    }
 
     private async void RunPanelCommand(string id)
     {
@@ -282,12 +305,6 @@ public sealed class TrayApp : ApplicationContext
         {
             case "check":
                 await CheckAsync(true, 2, "вручную");
-                break;
-            case "history":
-                ShowHistory();
-                break;
-            case "journal":
-                OpenJournal();
                 break;
             case "folder":
                 OpenDataFolder();

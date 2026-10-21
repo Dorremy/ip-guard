@@ -19,4 +19,39 @@ public sealed class PanelServices
     public Func<IReadOnlyList<RunningProgram>> GetPrograms { get; init; } = () => Array.Empty<RunningProgram>();
 
     public Action<string, int, int> PlaySound { get; init; } = (_, _, _) => { };
+
+    public Func<IReadOnlyList<HistoryEntry>> GetHistory { get; init; } = () => Array.Empty<HistoryEntry>();
+
+    public Action ClearHistory { get; init; } = () => { };
+
+    public Func<string?> PickSavePath { get; init; } = () => null;
+
+    public Func<int> HistoryStamp { get; init; } = () => 0;
+
+    public Func<IReadOnlyList<string>> ReadJournal { get; init; } = () => Array.Empty<string>();
+
+    public Func<long> JournalStamp { get; init; } = () => 0;
+
+    public Action OpenJournalFile { get; init; } = () => { };
+
+    public Action<string> CopyText { get; init; } = ClipboardText.TrySet;
+}
+
+public static class ClipboardText
+{
+    public static void TrySet(string text)
+    {
+        if (text.Length == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            Clipboard.SetText(text);
+        }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
+        }
+    }
 }

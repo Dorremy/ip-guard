@@ -38,6 +38,8 @@ public static class RowMetrics
     public const float IconButton = 28f;
     public const float IconGap = 4f;
     public const float NoteFont = 12f;
+    public const float HistoryHeight = 52f;
+    public const int LineMaxLines = 4;
 }
 
 public static class TextMetrics
@@ -787,6 +789,61 @@ public sealed class ItemRow : Row
         }
 
         return false;
+    }
+}
+
+public sealed class HistoryRow : Row
+{
+    public HistoryRow(HistoryEntry entry)
+    {
+        Entry = entry;
+    }
+
+    public HistoryEntry Entry { get; }
+
+    public override bool Focusable => false;
+
+    public override float Height(float width) => RowMetrics.HistoryHeight;
+}
+
+public enum LineLevel
+{
+    Normal,
+    Alert,
+    Error
+}
+
+public sealed class LineRow : Row
+{
+    public LineRow(string text, LineLevel level)
+    {
+        Text = text;
+        Level = level;
+    }
+
+    public string Text { get; }
+
+    public LineLevel Level { get; }
+
+    public override bool Focusable => false;
+
+    public static LineLevel LevelOf(string text)
+    {
+        var c = StringComparison.CurrentCultureIgnoreCase;
+        if (text.Contains("ошибка", c) || text.Contains("Не удалось", c))
+        {
+            return LineLevel.Error;
+        }
+
+        return text.Contains("IP изменился", c) || text.Contains("Утечка", c) || text.Contains("VPN отключился", c) || text.Contains("тревог", c) || text.Contains("Защита сработала", c)
+            ? LineLevel.Alert
+            : LineLevel.Normal;
+    }
+
+    public override float Height(float width)
+    {
+        var lines = Math.Clamp(TextMetrics.Lines(Text, width - 2 * RowMetrics.Padding, RowMetrics.NoteFont), 1, RowMetrics.LineMaxLines);
+        return lines * RowMetrics.NoteLine + 8f;
     }
 }
 

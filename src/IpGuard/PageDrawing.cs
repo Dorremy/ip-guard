@@ -46,9 +46,10 @@ public static class PageDrawing
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-        var area = PageGeometry.Area;
+        var frame = host.Frame;
+        var area = frame.Area;
         DrawHeader(g, page, host, sx, sy, fonts);
-        var vp = PageGeometry.Viewport(page);
+        var vp = frame.Viewport(page);
         var viewport = new RectangleF(0, vp.Y - area.Y, area.Width * sx, vp.Height * sy);
         viewport = new RectangleF(0, (vp.Y - area.Y) * sy, area.Width * sx, vp.Height * sy);
         var state = g.Save();
@@ -114,25 +115,49 @@ public static class PageDrawing
 
     private static void DrawHeader(Graphics g, Page page, PageHost host, float sx, float sy, PageFonts f)
     {
-        var back = PageGeometry.Back;
-        var area = PageGeometry.Area;
-        var tile = R(back.X - area.X, back.Y - area.Y, back.Width, back.Height, sx, sy);
-        using (var path = Rounded(tile, 8 * sx))
-        using (var fill = new SolidBrush(A(Color.White, host.BackPressed ? 56 : host.BackHover ? 40 : 18)))
+        var frame = host.Frame;
+        var area = frame.Area;
+        var titleLeft = 14f;
+        if (host.CanGoBack)
         {
-            g.FillPath(fill, path);
-        }
+            var back = frame.Back;
+            var tile = R(back.X - area.X, back.Y - area.Y, back.Width, back.Height, sx, sy);
+            using (var path = Rounded(tile, 8 * sx))
+            using (var fill = new SolidBrush(A(Color.White, host.BackPressed ? 56 : host.BackHover ? 40 : 18)))
+            {
+                g.FillPath(fill, path);
+            }
 
-        using (var pen = new Pen(A(Ink, 230), Math.Max(1.5f, 1.8f * sx)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
-        {
+            using var pen = new Pen(A(Ink, 230), Math.Max(1.5f, 1.8f * sx)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
             var cx = tile.X + tile.Width / 2;
             var cy = tile.Y + tile.Height / 2;
             g.DrawLines(pen, new[] { new PointF(cx + 3 * sx, cy - 7 * sy), new PointF(cx - 3 * sx, cy), new PointF(cx + 3 * sx, cy + 7 * sy) });
+            titleLeft = 44f;
+        }
+
+        var titleRight = 12f;
+        if (host.ShowClose)
+        {
+            var close = frame.Close;
+            var tile = R(close.X - area.X, close.Y - area.Y, close.Width, close.Height, sx, sy);
+            using (var path = Rounded(tile, 8 * sx))
+            using (var fill = new SolidBrush(A(Color.White, host.ClosePressed ? 56 : host.CloseHover ? 40 : 18)))
+            {
+                g.FillPath(fill, path);
+            }
+
+            using var pen = new Pen(A(Ink, 230), Math.Max(1.5f, 1.7f * sx)) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            var cx = tile.X + tile.Width / 2;
+            var cy = tile.Y + tile.Height / 2;
+            var d = 5f * sx;
+            g.DrawLine(pen, cx - d, cy - d, cx + d, cy + d);
+            g.DrawLine(pen, cx - d, cy + d, cx + d, cy - d);
+            titleRight = 48f;
         }
 
         using var format = new StringFormat(StringFormatFlags.NoWrap) { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter };
         using var text = new SolidBrush(Ink);
-        g.DrawString(page.Title, f.Title, text, R(44, 0, area.Width - 56, PageGeometry.HeaderHeight, sx, sy), format);
+        g.DrawString(page.Title, f.Title, text, R(titleLeft, 0, area.Width - titleLeft - titleRight, PageGeometry.HeaderHeight, sx, sy), format);
         using var line = new Pen(A(Color.White, 24), Math.Max(1f, sy));
         g.DrawLine(line, 8 * sx, PageGeometry.HeaderHeight * sy, (area.Width - 8) * sx, PageGeometry.HeaderHeight * sy);
     }
@@ -145,7 +170,8 @@ public static class PageDrawing
             return;
         }
 
-        var area = PageGeometry.Area;
+        var frame = host.Frame;
+        var area = frame.Area;
         using (var line = new Pen(A(Color.White, 24), Math.Max(1f, sy)))
         {
             var y = (area.Height - PageGeometry.FooterHeight) * sy;
@@ -157,7 +183,7 @@ public static class PageDrawing
         {
             var button = page.Footer[i];
             var enabled = button.IsEnabled;
-            var r = PageGeometry.FooterButton(i, count);
+            var r = frame.FooterButton(i, count);
             var rect = R(r.X - area.X, r.Y - area.Y, r.Width, r.Height, sx, sy);
             var hover = enabled && host.FooterHover == i;
             var pressed = enabled && host.FooterPressed == i;
@@ -215,6 +241,22 @@ public static class PageDrawing
                 using (var brush = new SolidBrush(A(Dim, 220)))
                 {
                     g.DrawString(note.Text, f.Small, brush, R(12, top + 3, width - 24, height - 4, sx, sy));
+                }
+
+                return;
+            case HistoryRow history:
+                DrawHistory(g, history.Entry, top, width, height, sx, sy, f);
+                return;
+            case LineRow line:
+                using (var brush = new SolidBrush(line.Level switch
+                {
+                    LineLevel.Error => Color.FromArgb(240, 130, 130),
+                    LineLevel.Alert => A(NebulaRenderer.ToneColor(Tone.Alert), 235),
+                    _ => A(Dim, 230)
+                }))
+                using (var format = new StringFormat(StringFormatFlags.LineLimit) { Trimming = StringTrimming.EllipsisCharacter })
+                {
+                    g.DrawString(line.Text, f.Small, brush, R(12, top + 2, width - 24, height - 3, sx, sy), format);
                 }
 
                 return;
@@ -377,6 +419,29 @@ public static class PageDrawing
                 DrawTextField(g, input, top, width, focus, enabled, accent, caretOn, sx, sy, f);
                 break;
         }
+    }
+
+    private static void DrawHistory(Graphics g, HistoryEntry entry, float top, float width, float height, float sx, float sy, PageFonts f)
+    {
+        using (var path = Rounded(R(4, top, width - 8, height - 2, sx, sy), 8 * sx))
+        using (var fill = new SolidBrush(A(Color.White, 9)))
+        {
+            g.FillPath(fill, path);
+        }
+
+        var tone = NebulaRenderer.ToneColor(PanelState.ToneOf(entry.Status));
+        using var left = new StringFormat(StringFormatFlags.NoWrap) { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter };
+        using var ink = new SolidBrush(A(Ink, 240));
+        using var dim = new SolidBrush(A(Dim, 225));
+        using var toneBrush = new SolidBrush(A(tone, 245));
+        g.DrawString(entry.Time.ToString("dd.MM HH:mm:ss"), f.Small, dim, R(12, top + 4, 110, 22, sx, sy), left);
+        g.DrawString(entry.Ip, f.Label, ink, R(124, top + 3, 170, 24, sx, sy), left);
+        var place = entry.Country.Length > 0 ? $"{entry.Country} ({entry.CountryCode})" : entry.CountryCode;
+        g.DrawString(place, f.Small, dim, R(300, top + 4, width - 312, 22, sx, sy), left);
+        g.FillEllipse(toneBrush, 14 * sx, (top + 33) * sy, 8 * sx, 8 * sy);
+        g.DrawString(Labels.For(entry.Status), f.Small, toneBrush, R(28, top + 27, 140, 20, sx, sy), left);
+        var note = string.IsNullOrWhiteSpace(entry.Note) ? "" : "  ·  " + entry.Note.Replace("\n", "; ");
+        g.DrawString(entry.Provider + note, f.Small, dim, R(170, top + 27, width - 182, 20, sx, sy), left);
     }
 
     private static void DrawTextField(Graphics g, TextRow input, float top, float width, bool focus, bool enabled, Color accent, bool caretOn, float sx, float sy, PageFonts f)
