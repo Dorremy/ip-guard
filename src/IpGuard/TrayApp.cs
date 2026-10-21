@@ -35,6 +35,7 @@ public sealed class TrayApp : ApplicationContext
     private bool rerun;
     private bool settingsOpen;
     private bool referencesOpen;
+    private readonly List<string> restoreNotice = new();
     private readonly StatusServer statusServer = new();
     private readonly string statusPath;
     private StatusSnapshot? lastSnapshot;
@@ -50,14 +51,18 @@ public sealed class TrayApp : ApplicationContext
     {
         ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         dataDir = DataFolder.Current();
-        settingsStore = new JsonStore<Settings>(Path.Combine(dataDir, "settings.json"));
-        stateStore = new JsonStore<MonitorState>(Path.Combine(dataDir, "state.json"));
+        var backups = Path.Combine(dataDir, "backups");
+        settingsStore = new JsonStore<Settings>(Path.Combine(dataDir, "settings.json"), backups);
+        stateStore = new JsonStore<MonitorState>(Path.Combine(dataDir, "state.json"), backups);
+        RegisterErrorHandlers();
         journal = new Journal(Path.Combine(dataDir, "log.txt"));
         statusPath = Path.Combine(dataDir, "status.json");
         settings = settingsStore.Load();
         Sounds.Volume = settings.SoundVolume;
         state = stateStore.Load();
         state.MigrateLegacy();
+        ReportRestore("settings.json", settingsStore.LastSource);
+        ReportRestore("state.json", stateStore.LastSource);
         watcher = new IpWatcher(
             state,
             () => settings.HomeCountryCode,
@@ -78,6 +83,10 @@ public sealed class TrayApp : ApplicationContext
         tray.ContextMenuStrip = BuildMenu();
         tray.DoubleClick += (_, _) => ShowHistory();
         tray.Visible = true;
+        if (restoreNotice.Count > 0)
+        {
+            tray.ShowBalloonTip(8000, "IpGuard", string.Join("; ", restoreNotice), ToolTipIcon.Warning);
+        }
 
         pollTimer.Interval = Math.Max(15, settings.IntervalSeconds) * 1000;
         pollTimer.Tick += async (_, _) => await CheckAsync(false, 2, "таймер");
@@ -370,6 +379,35 @@ public sealed class TrayApp : ApplicationContext
         await CheckAsync(true, 1, "импорт");
     }
 
+    private void ReportRestore(string file, LoadSource source)
+    {
+        var text = source switch
+        {
+            LoadSource.PreviousVersion => "восстановлен из предыдущей версии",
+            LoadSource.Snapshot => "восстановлен из резервной копии",
+            LoadSource.Default => "не удалось прочитать, начато с чистых значений",
+            _ => null
+        };
+        if (text is null)
+        {
+            return;
+        }
+
+        journal.Write($"Файл {file}: {text}");
+        restoreNotice.Add($"{file} {text}");
+    }
+
+    private void RegisterErrorHandlers()
+    {
+        Application.ThreadException += (_, e) => journal.Write(ErrorText.Format("интерфейс", e.Exception));
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            journal.Write(ErrorText.Format("фоновая задача", e.Exception));
+            e.SetObserved();
+        };
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => journal.Write(ErrorText.Format("необработанная ошибка", e.ExceptionObject as Exception));
+    }
+
     private void ShowReferences()
     {
         if (referencesOpen)
@@ -420,7 +458,15 @@ public sealed class TrayApp : ApplicationContext
             pollTimer.Interval = Math.Max(15, settings.IntervalSeconds) * 1000;
             if (form.AutostartResult != Autostart.IsEnabled())
             {
-                Autostart.Set(form.AutostartResult);
+                try
+                {
+                    Autostart.Set(form.AutostartResult);
+                }
+                catch (Exception e) when (e is UnauthorizedAccessException or System.Security.SecurityException or IOException)
+                {
+                    journal.Write($"Не удалось изменить автозапуск: {e.Message}");
+                    MessageBox.Show("Не удалось изменить автозапуск: Windows не разрешила запись. Остальные настройки сохранены.", "IpGuard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
             }
 
             ApplyStatusServer();
