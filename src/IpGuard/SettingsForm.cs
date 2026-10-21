@@ -37,6 +37,7 @@ public sealed class SettingsForm : Form
     private readonly CheckBox ipv6 = new() { Text = "Проверять IPv6", AutoSize = true };
     private readonly ComboBox outage = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
     private readonly CheckBox alertWindow = new() { Text = "Показывать окно тревоги поверх всех окон", AutoSize = true };
+    private readonly CheckBox simpleMenu = new() { Text = "Простое меню вместо окна по левому клику на значок", AutoSize = true };
     private readonly CheckBox soundBox = new() { Text = "Звуки включены", AutoSize = true };
     private readonly CheckBox statusBox = new() { Text = "Отдавать статус скриптам на этом компьютере", AutoSize = true };
     private readonly NumericUpDown statusPort = new() { Minimum = MinPort, Maximum = MaxPort, Width = 80 };
@@ -83,7 +84,7 @@ public sealed class SettingsForm : Form
             Padding = new Padding(12)
         };
 
-        root.Controls.Add(Group("Основное", Row("Домашняя страна", country), Row("Интервал проверки, секунд", interval), autostartBox));
+        root.Controls.Add(Group("Основное", Row("Домашняя страна", country), Row("Интервал проверки, секунд", interval), autostartBox, simpleMenu));
         root.Controls.Add(Group("Проверки", direct, ipv6, Row("Сообщать о потере связи", outage)));
         root.Controls.Add(Group("Уведомления", alertWindow, soundBox, Row("Громкость", volume), VariantRows()));
         root.Controls.Add(Group("Для скриптов", statusBox, Row("Порт", statusPort), statusHint));
@@ -244,6 +245,7 @@ public sealed class SettingsForm : Form
         direct.Checked = working.CheckDirectRoute;
         ipv6.Checked = working.CheckIpv6;
         alertWindow.Checked = working.AlertWindow;
+        simpleMenu.Checked = working.SimpleMenu;
         soundBox.Checked = working.SoundEnabled;
         volume.Value = Math.Clamp(working.SoundVolume, 0, 100);
         loading = true;
@@ -282,6 +284,7 @@ public sealed class SettingsForm : Form
         working.CheckIpv6 = ipv6.Checked;
         working.OutageSeconds = OutageChoices[outage.SelectedIndex].Seconds;
         working.AlertWindow = alertWindow.Checked;
+        working.SimpleMenu = simpleMenu.Checked;
         working.SoundEnabled = soundBox.Checked;
         working.SoundVolume = volume.Value;
         working.UpdateCheckEnabled = updatesBox.Checked;

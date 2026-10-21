@@ -46,6 +46,9 @@ public sealed class TrayApp : ApplicationContext
     private readonly System.Windows.Forms.Timer updateTimer = new() { Interval = 60 * 60 * 1000 };
     private readonly ToolStripMenuItem updateAvailable = new("") { Visible = false };
     private ReleaseInfo? availableRelease;
+    private NebulaPanel? panel;
+    private PanelState panelState = PanelState.Initial;
+    private bool checking;
 
     public TrayApp()
     {
@@ -81,7 +84,20 @@ public sealed class TrayApp : ApplicationContext
         tray.Icon = TrayIcons.For(Status.Unavailable);
         tray.Text = "IpGuard";
         tray.ContextMenuStrip = BuildMenu();
-        tray.DoubleClick += (_, _) => ShowHistory();
+        tray.MouseClick += (_, e) =>
+        {
+            if (e.Button == MouseButtons.Left && !settings.SimpleMenu)
+            {
+                TogglePanel();
+            }
+        };
+        tray.DoubleClick += (_, _) =>
+        {
+            if (settings.SimpleMenu)
+            {
+                ShowHistory();
+            }
+        };
         tray.Visible = true;
         if (restoreNotice.Count > 0)
         {
@@ -114,6 +130,7 @@ public sealed class TrayApp : ApplicationContext
         updateTimer.Dispose();
         protectForm?.Dispose();
         alertForm?.Dispose();
+        panel?.Dispose();
         NetworkChange.NetworkAddressChanged -= OnNetworkChanged;
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         pollTimer.Stop();
@@ -160,11 +177,7 @@ public sealed class TrayApp : ApplicationContext
         settingsItem.Click += async (_, _) => await ShowSettingsAsync();
 
         var folder = new ToolStripMenuItem("Открыть папку с данными");
-        folder.Click += (_, _) =>
-        {
-            Directory.CreateDirectory(dataDir);
-            Process.Start(new ProcessStartInfo("explorer.exe", dataDir) { UseShellExecute = true });
-        };
+        folder.Click += (_, _) => OpenDataFolder();
 
         updateAvailable.Click += (_, _) => OpenUpdatePage();
 
@@ -174,15 +187,7 @@ public sealed class TrayApp : ApplicationContext
         var version = new ToolStripMenuItem($"Версия {Application.ProductVersion.Split('+')[0]}") { Enabled = false };
 
         var log = new ToolStripMenuItem("Открыть журнал");
-        log.Click += (_, _) =>
-        {
-            if (!File.Exists(journal.Path))
-            {
-                journal.Write("Журнал создан");
-            }
-
-            Process.Start(new ProcessStartInfo(journal.Path) { UseShellExecute = true });
-        };
+        log.Click += (_, _) => OpenJournal();
 
         var exit = new ToolStripMenuItem("Выход");
         exit.Click += (_, _) => ExitThread();
@@ -212,6 +217,76 @@ public sealed class TrayApp : ApplicationContext
             exit
         });
         return menu;
+    }
+
+    private void OpenDataFolder()
+    {
+        Directory.CreateDirectory(dataDir);
+        Process.Start(new ProcessStartInfo("explorer.exe", dataDir) { UseShellExecute = true });
+    }
+
+    private void OpenJournal()
+    {
+        if (!File.Exists(journal.Path))
+        {
+            journal.Write("Журнал создан");
+        }
+
+        Process.Start(new ProcessStartInfo(journal.Path) { UseShellExecute = true });
+    }
+
+    private void TogglePanel()
+    {
+        if (panel is { IsDisposed: false, Opened: true })
+        {
+            panel.BeginClose();
+            return;
+        }
+
+        if (panel is { IsDisposed: false } && (DateTime.UtcNow - panel.LastClosedUtc).TotalMilliseconds < 350)
+        {
+            return;
+        }
+
+        if (panel is null or { IsDisposed: true })
+        {
+            panel = new NebulaPanel(RunPanelCommand);
+            panel.Apply(panelState);
+        }
+
+        panel.SetChecking(checking);
+        panel.Open(Cursor.Position);
+    }
+
+    private async void RunPanelCommand(string id)
+    {
+        switch (id)
+        {
+            case "check":
+                await CheckAsync(true, 2, "вручную");
+                break;
+            case "history":
+                ShowHistory();
+                break;
+            case "references":
+                ShowReferences();
+                break;
+            case "settings":
+                await ShowSettingsAsync();
+                break;
+            case "journal":
+                OpenJournal();
+                break;
+            case "folder":
+                OpenDataFolder();
+                break;
+        }
+    }
+
+    private void SetChecking(bool value)
+    {
+        checking = value;
+        panel?.SetChecking(value);
     }
 
     private void SaveSettings()
@@ -581,6 +656,7 @@ public sealed class TrayApp : ApplicationContext
             return;
         }
 
+        SetChecking(true);
         try
         {
             do
@@ -597,6 +673,7 @@ public sealed class TrayApp : ApplicationContext
         }
         finally
         {
+            SetChecking(false);
             gate.Release();
         }
     }
@@ -831,6 +908,9 @@ public sealed class TrayApp : ApplicationContext
                 : $"{(references.Count == 1 ? "Эталон" : "Эталоны")} для {info.CountryCode}: {IpWatcher.DescribeReferences(references)}";
             reference.Text = text.Length > 70 ? text[..69] + "…" : text;
         }
+
+        panelState = PanelState.From(verdict, info, abroad ? reference.Text ?? "" : "");
+        panel?.Apply(panelState);
 
         var alarm = verdict.Status is Status.Changed or Status.Leak;
         var plan = NotificationPolicy.Decide(verdict, settings.AlertWindow, settings.SoundEnabled, quiet.Active);

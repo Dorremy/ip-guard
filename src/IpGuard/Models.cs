@@ -79,6 +79,7 @@ public sealed class Settings
     public bool CheckDirectRoute { get; set; } = true;
     public bool CheckIpv6 { get; set; } = true;
     public bool AlertWindow { get; set; } = true;
+    public bool SimpleMenu { get; set; } = false;
     public int OutageSeconds { get; set; } = 30;
     public int SoundVolume { get; set; } = 100;
     public bool StatusServerEnabled { get; set; } = false;
@@ -102,6 +103,7 @@ public sealed class Settings
         CheckDirectRoute = other.CheckDirectRoute;
         CheckIpv6 = other.CheckIpv6;
         AlertWindow = other.AlertWindow;
+        SimpleMenu = other.SimpleMenu;
         OutageSeconds = other.OutageSeconds;
         SoundVolume = other.SoundVolume;
         StatusServerEnabled = other.StatusServerEnabled;
