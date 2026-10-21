@@ -250,13 +250,31 @@ public sealed class TrayApp : ApplicationContext
 
         if (panel is null or { IsDisposed: true })
         {
-            panel = new NebulaPanel(RunPanelCommand);
+            panel = new NebulaPanel(RunPanelCommand, services: BuildServices());
             panel.Apply(panelState);
         }
 
         panel.SetChecking(checking);
         panel.Open(Cursor.Position);
     }
+
+    private PanelServices BuildServices() => new()
+    {
+        GetSettings = () => settings,
+        GetAutostart = Autostart.IsEnabled,
+        ApplySettings = (result, autostartResult) => _ = ApplySettingsAsync(result, autostartResult),
+        GetState = () => state,
+        ReferencesChanged = () =>
+        {
+            Persist();
+            journal.Write("Список эталонов изменён");
+            _ = CheckAsync(true, 1, "эталоны");
+        },
+        GetCurrentIp = () => monitor.Current,
+        GetHome = () => settings.HomeCountryCode,
+        GetPrograms = ProgramCloser.RunningWithWindows,
+        PlaySound = (key, variant, level) => Sounds.Play(key, variant, level)
+    };
 
     private async void RunPanelCommand(string id)
     {
@@ -267,12 +285,6 @@ public sealed class TrayApp : ApplicationContext
                 break;
             case "history":
                 ShowHistory();
-                break;
-            case "references":
-                ShowReferences();
-                break;
-            case "settings":
-                await ShowSettingsAsync();
                 break;
             case "journal":
                 OpenJournal();
@@ -527,31 +539,36 @@ public sealed class TrayApp : ApplicationContext
                 return;
             }
 
-            settings.CopyFrom(form.Result);
-            Sounds.Volume = settings.SoundVolume;
-            SaveSettings();
-            pollTimer.Interval = Math.Max(15, settings.IntervalSeconds) * 1000;
-            if (form.AutostartResult != Autostart.IsEnabled())
-            {
-                try
-                {
-                    Autostart.Set(form.AutostartResult);
-                }
-                catch (Exception e) when (e is UnauthorizedAccessException or System.Security.SecurityException or IOException)
-                {
-                    journal.Write($"Не удалось изменить автозапуск: {e.Message}");
-                    MessageBox.Show("Не удалось изменить автозапуск: Windows не разрешила запись. Остальные настройки сохранены.", "IpGuard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                }
-            }
-
-            ApplyStatusServer();
-            journal.Write("Настройки сохранены");
-            await CheckAsync(true, 1, "настройки");
+            await ApplySettingsAsync(form.Result, form.AutostartResult);
         }
         finally
         {
             settingsOpen = false;
         }
+    }
+
+    private async Task ApplySettingsAsync(Settings result, bool autostartResult)
+    {
+        settings.CopyFrom(result);
+        Sounds.Volume = settings.SoundVolume;
+        SaveSettings();
+        pollTimer.Interval = Math.Max(15, settings.IntervalSeconds) * 1000;
+        if (autostartResult != Autostart.IsEnabled())
+        {
+            try
+            {
+                Autostart.Set(autostartResult);
+            }
+            catch (Exception e) when (e is UnauthorizedAccessException or System.Security.SecurityException or IOException)
+            {
+                journal.Write($"Не удалось изменить автозапуск: {e.Message}");
+                MessageBox.Show("Не удалось изменить автозапуск: Windows не разрешила запись. Остальные настройки сохранены.", "IpGuard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        ApplyStatusServer();
+        journal.Write("Настройки сохранены");
+        await CheckAsync(true, 1, "настройки");
     }
 
     private async Task AcceptCurrentAsReferenceAsync()

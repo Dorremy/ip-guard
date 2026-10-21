@@ -28,6 +28,9 @@ public sealed class NebulaRenderer : IDisposable
     private Font? ipFont;
     private Font? subFont;
     private Font? itemFont;
+    private PageFonts? pageFonts;
+    private Bitmap? pageCache;
+    private (Page? Page, int Rows, int Host, int Argb, bool Caret, int Width, int Height) pageKey;
     private Bitmap? infoCache;
     private string infoKey = "";
     private Bitmap? overlay;
@@ -36,6 +39,7 @@ public sealed class NebulaRenderer : IDisposable
     private GraphicsPath? glassPath;
     private Rectangle glassArea;
     private int linkWidth = 1;
+    private Tone accentTone = Tone.Calm;
 
     public static Color ToneColor(Tone tone) => tone switch
     {
@@ -44,7 +48,7 @@ public sealed class NebulaRenderer : IDisposable
         _ => Color.FromArgb(150, 225, 190)
     };
 
-    public void Render(Bitmap target, IntroDirector director, MenuModel menu)
+    public void Render(Bitmap target, IntroDirector director, MenuModel menu, PageHost? pages = null, bool caretOn = true)
     {
         var w = target.Width;
         var h = target.Height;
@@ -69,8 +73,9 @@ public sealed class NebulaRenderer : IDisposable
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             g.InterpolationMode = InterpolationMode.HighQualityBilinear;
             EnsureFonts(sx);
-            DrawInfo(g, director, sx, sy);
-            DrawMenu(g, target, director, menu, sx, sy);
+            var pageProgress = pages?.Progress ?? 0f;
+            DrawInfo(g, director, sx, sy, 1f - pageProgress);
+            DrawMenu(g, target, director, menu, pages, caretOn, sx, sy);
             using var border = new Pen(Color.FromArgb(26, 255, 255, 255), 1f);
             g.DrawRectangle(border, 0.5f, 0.5f, w - 1.5f, h - 1.5f);
         }
@@ -84,6 +89,8 @@ public sealed class NebulaRenderer : IDisposable
         subFont?.Dispose();
         itemFont?.Dispose();
         infoCache?.Dispose();
+        pageFonts?.Dispose();
+        pageCache?.Dispose();
         overlay?.Dispose();
         glass?.Dispose();
         glassPath?.Dispose();
@@ -180,6 +187,7 @@ public sealed class NebulaRenderer : IDisposable
         var time = d.Time;
         var life = Smooth(time / 0.5f);
         var flash = d.Flash;
+        accentTone = d.Tone;
         var toneColor = ToneColor(d.Tone);
         var fromColor = d.PreviousTone is { } previous ? ToneColor(previous) : Pale;
         var statusColor = Mix(fromColor, toneColor, d.Blend);
@@ -365,9 +373,9 @@ public sealed class NebulaRenderer : IDisposable
         }
     }
 
-    private void DrawInfo(Graphics g, IntroDirector d, float sx, float sy)
+    private void DrawInfo(Graphics g, IntroDirector d, float sx, float sy, float fade)
     {
-        var alpha = d.InfoAlpha;
+        var alpha = d.InfoAlpha * fade;
         if (alpha <= 0.01f)
         {
             return;
@@ -413,10 +421,21 @@ public sealed class NebulaRenderer : IDisposable
         g.DrawImage(image, dest, 0, 0, image.Width, image.Height, GraphicsUnit.Pixel, attributes);
     }
 
-    private void DrawMenu(Graphics g, Bitmap target, IntroDirector d, MenuModel menu, float sx, float sy)
+    private void DrawMenu(Graphics g, Bitmap target, IntroDirector d, MenuModel menu, PageHost? pages, bool caretOn, float sx, float sy)
     {
+        var pageP = pages?.Progress ?? 0f;
         var p = d.MenuProgress;
-        var logical = menu.Area(p);
+        var menuArea = menu.Area(p);
+        Rectangle logical;
+        if (pageP > 0.001f)
+        {
+            logical = menuArea.IsEmpty ? PageGeometry.Area : LerpRect(menuArea, PageGeometry.Area, pageP);
+        }
+        else
+        {
+            logical = menuArea;
+        }
+
         if (logical.IsEmpty)
         {
             return;
@@ -446,7 +465,7 @@ public sealed class NebulaRenderer : IDisposable
 
         g.SetClip(glassPath);
         g.DrawImage(glass, area);
-        if (p >= 1f)
+        if (pageP <= 0.001f && p >= 1f)
         {
             var key = (menu.Hover, menu.Focus, menu.Pressed, area.Width, area.Height);
             if (overlay is null || key != overlayKey)
@@ -458,7 +477,7 @@ public sealed class NebulaRenderer : IDisposable
                 og.SmoothingMode = SmoothingMode.AntiAlias;
                 og.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
                 DrawGlassSkin(og, new RectangleF(0, 0, area.Width, area.Height), sx);
-                DrawItems(og, menu, 1f, sx, sy, new PointF(-area.X, -area.Y));
+                DrawItems(og, menu, 1f, 1f, sx, sy, new PointF(-area.X, -area.Y));
             }
 
             g.DrawImageUnscaled(overlay, area.Location);
@@ -466,10 +485,53 @@ public sealed class NebulaRenderer : IDisposable
         else
         {
             DrawGlassSkin(g, area, sx);
-            DrawItems(g, menu, p, sx, sy, PointF.Empty);
+            var itemsFade = Math.Clamp(1f - pageP * 1.6f, 0f, 1f);
+            if (itemsFade > 0.01f)
+            {
+                DrawItems(g, menu, p, itemsFade, sx, sy, PointF.Empty);
+            }
+
+            if (pages is { Current: { } page } && pageP > 0.3f)
+            {
+                DrawPage(g, page, pages, caretOn, (pageP - 0.3f) / 0.7f, sx, sy);
+            }
         }
 
         g.ResetClip();
+    }
+
+    private void DrawPage(Graphics g, Page page, PageHost pages, bool caretOn, float appear, float sx, float sy)
+    {
+        if (pageFonts is null || Math.Abs(pageFonts.Scale - sx) > 0.001f)
+        {
+            pageFonts?.Dispose();
+            pageFonts = new PageFonts(sx);
+            pageCache?.Dispose();
+            pageCache = null;
+        }
+
+        var accent = ToneColor(accentTone);
+        var width = Math.Max(1, (int)(PageGeometry.Area.Width * sx));
+        var height = Math.Max(1, (int)(PageGeometry.Area.Height * sy));
+        var focusText = page.Rows.Focus >= 0 && page.Rows.Focus < page.Rows.Rows.Count && page.Rows.Rows[page.Rows.Focus] is TextRow;
+        var key = (page, page.Rows.Version, pages.Version, accent.ToArgb(), caretOn && focusText, width, height);
+        if (pageCache is null || key != pageKey)
+        {
+            pageCache?.Dispose();
+            pageCache = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+            pageKey = key;
+            using var pg = Graphics.FromImage(pageCache);
+            PageDrawing.Render(pg, page, pages, accent, caretOn && focusText, sx, sy, pageFonts);
+        }
+
+        var alpha = Math.Clamp(appear * pages.ContentAlpha, 0f, 1f);
+        DrawFaded(g, pageCache, new Rectangle((int)(PageGeometry.Area.X * sx), (int)(PageGeometry.Area.Y * sy), width, height), alpha);
+    }
+
+    private static Rectangle LerpRect(Rectangle a, Rectangle b, float t)
+    {
+        int L(int x, int y) => (int)MathF.Round(x + (y - x) * t);
+        return new Rectangle(L(a.X, b.X), L(a.Y, b.Y), L(a.Width, b.Width), L(a.Height, b.Height));
     }
 
     private static void DrawGlassSkin(Graphics g, RectangleF area, float sx)
@@ -484,13 +546,13 @@ public sealed class NebulaRenderer : IDisposable
         g.DrawPath(edge, path);
     }
 
-    private void DrawItems(Graphics g, MenuModel menu, float progress, float sx, float sy, PointF offset)
+    private void DrawItems(Graphics g, MenuModel menu, float progress, float fade, float sx, float sy, PointF offset)
     {
         using var format = new StringFormat(StringFormatFlags.NoWrap) { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter };
         using var right = new StringFormat(StringFormatFlags.NoWrap) { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center };
         for (var i = 0; i < menu.Items.Count; i++)
         {
-            var a = menu.ItemAlpha(i, progress);
+            var a = menu.ItemAlpha(i, progress) * fade;
             if (a <= 0.01f)
             {
                 continue;

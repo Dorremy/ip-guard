@@ -29,6 +29,7 @@ public sealed class IntroDirector
     public const int RoamStart = StatusCount;
     public const int RoamerCount = 130;
     public const int DustStart = RoamStart + RoamerCount;
+    public const int SurgeCount = 260;
     private const float MaxStep = 1f;
     private const float SubStep = 1f / 30f;
     private const float ToneSeconds = 0.8f;
@@ -57,6 +58,10 @@ public sealed class IntroDirector
     private bool awaitingFirst;
     private float toneStart;
     private float disperseAt;
+    private int[] surge = Array.Empty<int>();
+    private float surgeEnds;
+    private int surgeCursor;
+    private readonly Random surgeRandom = new(77);
 
     public IntroDirector(ParticleField field, IntroTargets targets, Func<PanelState, PointF[]> statusTargets, IntroKind kind)
     {
@@ -121,6 +126,47 @@ public sealed class IntroDirector
     public float DustLevel => 1f - 0.65f * Smooth((Time - disperseAt - 0.1f) / 1.0f);
 
     public bool IsDust(int i) => i >= DustStart;
+
+    public IReadOnlyList<int> SurgeIndices => surge;
+
+    public bool Surging => surge.Length > 0;
+
+    public void Surge(Rectangle area)
+    {
+        var dust = field.Count - DustStart;
+        if (dust <= 0 || area.Width <= 0 || area.Height <= 0 || Scene < Scene.Status)
+        {
+            return;
+        }
+
+        ReleaseSurge();
+        var count = Math.Min(SurgeCount, dust);
+        var indices = new int[count];
+        var points = new PointF[count];
+        for (var k = 0; k < count; k++)
+        {
+            indices[k] = DustStart + (surgeCursor + k) % dust;
+            points[k] = new PointF(
+                area.X + (float)surgeRandom.NextDouble() * area.Width,
+                area.Y + (float)surgeRandom.NextDouble() * area.Height);
+        }
+
+        surgeCursor = (surgeCursor + count) % dust;
+        field.Assign(indices, points, 0.2f);
+        surge = indices;
+        surgeEnds = Time + 0.7f;
+    }
+
+    private void ReleaseSurge()
+    {
+        if (surge.Length == 0)
+        {
+            return;
+        }
+
+        field.Release(surge, 45);
+        surge = Array.Empty<int>();
+    }
 
     public bool Checking { get; set; }
 
@@ -239,6 +285,11 @@ public sealed class IntroDirector
             Stream();
         }
 
+        if (surge.Length > 0 && Time >= surgeEnds)
+        {
+            ReleaseSurge();
+        }
+
         field.Step(dt);
     }
 
@@ -259,6 +310,7 @@ public sealed class IntroDirector
 
     private void Begin(IntroKind kind)
     {
+        surge = Array.Empty<int>();
         Time = 0;
         Flash = 0;
         didName = false;
