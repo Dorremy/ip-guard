@@ -25,6 +25,8 @@ public sealed class ParticleField
     private readonly float[] speed;
     private readonly float[] phase;
     private readonly float[] activate;
+    private float pullX;
+    private float pullY;
 
     public ParticleField(int count, float width, float height, int seed)
     {
@@ -36,6 +38,8 @@ public sealed class ParticleField
         X = new float[count];
         Y = new float[count];
         Brightness = new float[count];
+        Depth = new float[count];
+        var depthRandom = new Random(seed * 7919 + 13);
         Modes = new Drive[count];
         vx = new float[count];
         vy = new float[count];
@@ -56,6 +60,7 @@ public sealed class ParticleField
             tx[i] = X[i];
             ty[i] = Y[i];
             Brightness[i] = Range(0.55f, 1f);
+            Depth[i] = 0.18f + 0.82f * MathF.Pow((float)depthRandom.NextDouble(), 1.5f);
             speed[i] = Range(0.6f, 1.4f);
             phase[i] = Range(0, 6.2832f);
             stiffness[i] = Range(35, 80);
@@ -71,11 +76,24 @@ public sealed class ParticleField
 
     public float Time { get; private set; }
 
+    public float FlowScale { get; set; } = 1f;
+
+    public float Pull { get; private set; }
+
+    public void SetPull(float x, float y, float strength)
+    {
+        pullX = float.IsFinite(x) ? x : 0f;
+        pullY = float.IsFinite(y) ? y : 0f;
+        Pull = float.IsFinite(strength) ? Math.Clamp(strength, 0f, 4f) : 0f;
+    }
+
     public float[] X { get; }
 
     public float[] Y { get; }
 
     public float[] Brightness { get; }
+
+    public float[] Depth { get; }
 
     public Drive[] Modes { get; }
 
@@ -243,8 +261,8 @@ public sealed class ParticleField
 
                 case Drive.Roam:
                 {
-                    var gx = hx[i] + 70 * unit * MathF.Sin(t * 0.4f + phase[i] * 1.7f);
-                    var gy = hy[i] + 60 * unit * MathF.Cos(t * 0.33f + phase[i] * 2.3f);
+                    var gx = hx[i] + 70 * unit * MathF.Sin(t * 0.22f + phase[i] * 1.7f);
+                    var gy = hy[i] + 60 * unit * MathF.Cos(t * 0.18f + phase[i] * 2.3f);
                     ax = 3f * (gx - px) - 1.6f * vx[i];
                     ay = 3f * (gy - py) - 1.6f * vy[i];
                     break;
@@ -257,8 +275,19 @@ public sealed class ParticleField
                     var angle = t * 0.1f + phase[i] * 0.05f;
                     var fx = 14 * MathF.Cos(angle) + 22 * MathF.Sin(uy * 0.011f + t * 0.55f + phase[i]) + 12 * MathF.Sin(uy * 0.019f - t * 0.37f + phase[i] * 1.7f);
                     var fy = 14 * MathF.Sin(angle) + 20 * MathF.Cos(ux * 0.012f - t * 0.5f + phase[i]) + 10 * MathF.Cos(ux * 0.021f + t * 0.31f + phase[i] * 2.1f);
-                    ax = (fx * speed[i] * unit - vx[i]) * 1.6f;
-                    ay = (fy * speed[i] * unit - vy[i]) * 1.6f;
+                    var parallax = (0.45f + 0.55f * Depth[i]) * Math.Clamp(FlowScale, 0.05f, 4f);
+                    ax = (fx * speed[i] * parallax * unit - vx[i]) * 1.6f;
+                    ay = (fy * speed[i] * parallax * unit - vy[i]) * 1.6f;
+                    if (Pull > 0f)
+                    {
+                        var gx = pullX + 80 * unit * MathF.Sin(phase[i] * 3.1f) - px;
+                        var gy = pullY + 12 * unit * MathF.Cos(phase[i] * 2.3f) - py;
+                        var dist = MathF.Sqrt(gx * gx + gy * gy) + 1e-3f;
+                        var reach = Math.Clamp((dist - 40 * unit) / (60 * unit), 0f, 1f);
+                        ax += Pull * gx / dist * MathF.Min(dist, 220 * unit) * reach;
+                        ay += Pull * gy / dist * MathF.Min(dist, 220 * unit) * reach;
+                    }
+
                     break;
                 }
             }
@@ -299,7 +328,7 @@ public sealed class ParticleField
     private void NewHome(int i)
     {
         hx[i] = Range(0.12f * Width, 0.88f * Width);
-        hy[i] = Range(0.38f * Height, 0.92f * Height);
+        hy[i] = Range(0.34f * Height, 0.94f * Height);
     }
 
     private float Range(float lo, float hi) => lo + (float)random.NextDouble() * (hi - lo);

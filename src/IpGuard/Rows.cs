@@ -40,6 +40,12 @@ public static class RowMetrics
     public const float NoteFont = 12f;
     public const float HistoryHeight = 52f;
     public const int LineMaxLines = 4;
+    public const float LabelFont = 14f;
+    public const float LabelLine = 19f;
+    public const float HintLine = 15f;
+    public const int LabelMaxLines = 2;
+    public const int HintMaxLines = 3;
+    public const float ToggleTextGap = 10f;
 }
 
 public static class TextMetrics
@@ -203,7 +209,29 @@ public sealed class ToggleRow : Row
 
     public bool Value { get; private set; }
 
-    public override float Height(float width) => Hint is null ? RowMetrics.RowHeight : RowMetrics.RowHeight + RowMetrics.HintExtra;
+    public static float TextWidth(float rowWidth)
+    {
+        var w = float.IsFinite(rowWidth) ? rowWidth : 0f;
+        return Math.Max(60f, w - 2 * RowMetrics.Padding - RowMetrics.SwitchWidth - RowMetrics.ToggleTextGap);
+    }
+
+    public int LabelLines(float rowWidth) =>
+        Math.Clamp(TextMetrics.Lines(Label, TextWidth(rowWidth), RowMetrics.LabelFont), 1, RowMetrics.LabelMaxLines);
+
+    public int HintLines(float rowWidth) =>
+        Hint is null ? 0 : Math.Clamp(TextMetrics.Lines(Hint, TextWidth(rowWidth), RowMetrics.NoteFont), 1, RowMetrics.HintMaxLines);
+
+    public override float Height(float width)
+    {
+        var labelLines = LabelLines(width);
+        var hintLines = HintLines(width);
+        if (hintLines == 0)
+        {
+            return labelLines == 1 ? RowMetrics.RowHeight : 16f + labelLines * RowMetrics.LabelLine;
+        }
+
+        return Math.Max(RowMetrics.RowHeight + RowMetrics.HintExtra, 14f + labelLines * RowMetrics.LabelLine + hintLines * RowMetrics.HintLine + 2f);
+    }
 
     public void Set(bool value)
     {

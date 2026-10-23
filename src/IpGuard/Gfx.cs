@@ -27,7 +27,15 @@ public static class Gfx
     {
         if (alpha >= 0.995f)
         {
-            g.DrawImageUnscaled(image, dest.Location);
+            if (image.Size == dest.Size)
+            {
+                g.DrawImageUnscaled(image, dest.Location);
+            }
+            else
+            {
+                g.DrawImage(image, dest);
+            }
+
             return;
         }
 

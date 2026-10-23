@@ -6,8 +6,6 @@ public sealed class JournalPage : Page
 
     private readonly PanelServices services;
     private readonly TextRow search = new("Поиск по журналу", "", 60) { Id = "search" };
-    private readonly ButtonRow open = new("Открыть файл") { Id = "open" };
-    private readonly ButtonRow copy = new("Копировать показанное") { Id = "copy" };
     private readonly NoteRow message = new("") { Id = "message" };
     private readonly NoteRow count = new("") { Id = "count" };
     private IReadOnlyList<string> shown = Array.Empty<string>();
@@ -19,8 +17,11 @@ public sealed class JournalPage : Page
         : base("Журнал")
     {
         this.services = services;
-        open.Action = () => services.OpenJournalFile();
-        copy.Action = Copy;
+        Footer = new[]
+        {
+            new FooterButton("Открыть файл", false, () => services.OpenJournalFile()),
+            new FooterButton("Копировать", true, Copy, () => shown.Count > 0)
+        };
         lastStamp = services.JournalStamp();
         Reload(false);
     }
@@ -61,11 +62,10 @@ public sealed class JournalPage : Page
             .Where(line => searchText.Length == 0 || line.Contains(searchText, StringComparison.CurrentCultureIgnoreCase))
             .ToList();
         shown = matching.Take(LineLimit).ToList();
-        copy.Enabled = shown.Count > 0;
         count.SetText(CountText(all.Count, matching.Count));
         var focusId = Rows.Focus >= 0 && Rows.Focus < Rows.Rows.Count ? Rows.Rows[Rows.Focus].Id : "";
         var scroll = Rows.ScrollY;
-        var rows = new List<Row> { search, open, copy, message, count };
+        var rows = new List<Row> { search, message, count };
         rows.AddRange(shown.Select(line => (Row)new LineRow(line, LineRow.LevelOf(line))));
         Rows.Replace(rows);
         if (focusId.Length > 0)

@@ -278,14 +278,18 @@ public static class PageDrawing
         {
             case ToggleRow toggle:
             {
-                var line = RowMetrics.RowHeight;
-                g.DrawString(toggle.Label, f.Label, inkBrush, R(12, top, width - 24 - RowMetrics.SwitchWidth, toggle.Hint is null ? line : 30, sx, sy), left);
+                var textWidth = ToggleRow.TextWidth(width);
+                var labelLines = toggle.LabelLines(width);
+                var hintLines = toggle.HintLines(width);
+                using var wrap = new StringFormat(StringFormatFlags.LineLimit) { Trimming = StringTrimming.EllipsisWord };
+                var labelTop = hintLines == 0 && labelLines == 1 ? top + (height - RowMetrics.LabelLine) / 2 : top + 8;
+                g.DrawString(toggle.Label, f.Label, inkBrush, R(12, labelTop, textWidth, labelLines * RowMetrics.LabelLine, sx, sy), wrap);
                 if (toggle.Hint is not null)
                 {
-                    g.DrawString(toggle.Hint, f.Small, dimBrush, R(12, top + 26, width - 70, 18, sx, sy), left);
+                    g.DrawString(toggle.Hint, f.Small, dimBrush, R(12, labelTop + labelLines * RowMetrics.LabelLine + 1, textWidth, hintLines * RowMetrics.HintLine, sx, sy), wrap);
                 }
 
-                DrawSwitch(g, R(width - 12 - RowMetrics.SwitchWidth, top + (line - RowMetrics.SwitchHeight) / 2, RowMetrics.SwitchWidth, RowMetrics.SwitchHeight, sx, sy), toggle.Value, enabled, accent);
+                DrawSwitch(g, R(width - 12 - RowMetrics.SwitchWidth, top + (height - RowMetrics.SwitchHeight) / 2, RowMetrics.SwitchWidth, RowMetrics.SwitchHeight, sx, sy), toggle.Value, enabled, accent);
                 break;
             }
 
@@ -435,9 +439,19 @@ public static class PageDrawing
         using var dim = new SolidBrush(A(Dim, 225));
         using var toneBrush = new SolidBrush(A(tone, 245));
         g.DrawString(entry.Time.ToString("dd.MM HH:mm:ss"), f.Small, dim, R(12, top + 4, 110, 22, sx, sy), left);
-        g.DrawString(entry.Ip, f.Label, ink, R(124, top + 3, 170, 24, sx, sy), left);
-        var place = entry.Country.Length > 0 ? $"{entry.Country} ({entry.CountryCode})" : entry.CountryCode;
-        g.DrawString(place, f.Small, dim, R(300, top + 4, width - 312, 22, sx, sy), left);
+        if (width < 480)
+        {
+            using var right = new StringFormat(StringFormatFlags.NoWrap) { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center };
+            g.DrawString(entry.Ip, f.Label, ink, R(112, top + 3, width - 172, 24, sx, sy), left);
+            g.DrawString(entry.CountryCode, f.Small, dim, R(width - 64, top + 4, 52, 22, sx, sy), right);
+        }
+        else
+        {
+            g.DrawString(entry.Ip, f.Label, ink, R(124, top + 3, 170, 24, sx, sy), left);
+            var place = entry.Country.Length > 0 ? $"{entry.Country} ({entry.CountryCode})" : entry.CountryCode;
+            g.DrawString(place, f.Small, dim, R(300, top + 4, width - 312, 22, sx, sy), left);
+        }
+
         g.FillEllipse(toneBrush, 14 * sx, (top + 33) * sy, 8 * sx, 8 * sy);
         g.DrawString(Labels.For(entry.Status), f.Small, toneBrush, R(28, top + 27, 140, 20, sx, sy), left);
         var note = string.IsNullOrWhiteSpace(entry.Note) ? "" : "  ·  " + entry.Note.Replace("\n", "; ");

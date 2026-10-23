@@ -27,6 +27,9 @@ public sealed class IntroDirector
     public const int LogoCount = 600;
     public const int StatusCount = 1600;
     public const int RoamStart = StatusCount;
+    private const float SparseStart = 0.22f;
+    private const float NameCrowd = 0.4f;
+    private const float MoodRate = 1.5f;
     public const int RoamerCount = 130;
     public const int DustStart = RoamStart + RoamerCount;
     public const int SurgeCount = 260;
@@ -58,6 +61,8 @@ public sealed class IntroDirector
     private bool awaitingFirst;
     private float toneStart;
     private float disperseAt;
+    private float burstAt = -100f;
+    private float burstPower;
     private int[] surge = Array.Empty<int>();
     private float surgeEnds;
     private int surgeCursor;
@@ -121,9 +126,38 @@ public sealed class IntroDirector
 
     public float InfoAlpha => Smooth((Time - timing.Status) / 0.7f);
 
+    public float Crowd
+    {
+        get
+        {
+            var begin = timing.Chaos * 0.4f;
+            if (timing.Name - begin < 0.5f)
+            {
+                return 1f;
+            }
+
+            var toName = Smooth((Time - begin) / (timing.Name - begin));
+            var settle = Smooth((Time - timing.Stream) / Math.Max(0.01f, timing.Status - timing.Stream));
+            return SparseStart + (NameCrowd - SparseStart) * toName + (1f - NameCrowd) * settle;
+        }
+    }
+
+    public float FlowScale { get; private set; } = 1f;
+
+    public float Warm { get; private set; }
+
+    public float Glow { get; private set; } = 1f;
+
+    public static float Presence(int index, float crowd)
+    {
+        var c = float.IsFinite(crowd) ? Math.Clamp(crowd, 0f, 1f) : 1f;
+        var rank = index * 0.6180339887f % 1f;
+        return Smooth((c * 1.15f - rank) / 0.15f);
+    }
+
     public float Dim => 1f - 0.18f * Smooth((Time - timing.Status - 0.1f) / 0.7f);
 
-    public float DustLevel => 1f - 0.65f * Smooth((Time - disperseAt - 0.1f) / 1.0f);
+    public float DustLevel => 0.6f - 0.25f * Smooth((Time - disperseAt - 0.1f) / 1.0f);
 
     public bool IsDust(int i) => i >= DustStart;
 
@@ -227,6 +261,8 @@ public sealed class IntroDirector
         {
             Reforms++;
             Flash = 1f;
+            burstAt = Time;
+            burstPower = Tone switch { Tone.Alert => 1f, Tone.Offline => 0f, _ => 0.5f };
             field.Release(statusIndices, 18);
             field.Assign(statusIndices, statusTargets(State), 0.25f);
         }
@@ -290,7 +326,28 @@ public sealed class IntroDirector
             ReleaseSurge();
         }
 
+        Mood(dt);
         field.Step(dt);
+    }
+
+    private void Mood(float dt)
+    {
+        var tone = Tone;
+        var checking = Checking && didStatus ? 1f : 0f;
+        var speed = tone switch { Tone.Alert => 1.25f, Tone.Offline => 0.45f, _ => 1f };
+        var warm = tone == Tone.Alert ? 0.65f : 0f;
+        var glow = tone switch { Tone.Alert => 1.15f, Tone.Offline => 0.25f, _ => 1f };
+        var since = Time - burstAt;
+        var burst = since < 0f || !didStatus ? 0f : Smooth(since / 0.25f) * MathF.Exp(-MathF.Max(0f, since - 0.25f) / 1.1f) * burstPower;
+        speed *= (1f + 0.7f * checking) * (1f + 0.8f * burst);
+        var k = 1f - MathF.Exp(-dt * MoodRate);
+        FlowScale += (speed - FlowScale) * k;
+        Warm += (warm - Warm) * k;
+        Glow += (glow - Glow) * k;
+        var packet = 0.5f + 0.5f * MathF.Sin(Time * 2.3f);
+        var pull = 0.3f * checking * (0.25f + 0.75f * packet) + 1.1f * burst;
+        field.FlowScale = FlowScale;
+        field.SetPull(field.Width / 2f, NebulaLayout.StripY, didStatus ? pull : 0f);
     }
 
     private void Stream()
@@ -311,6 +368,12 @@ public sealed class IntroDirector
     private void Begin(IntroKind kind)
     {
         surge = Array.Empty<int>();
+        burstAt = -100f;
+        FlowScale = 1f;
+        Warm = 0f;
+        Glow = 1f;
+        field.FlowScale = 1f;
+        field.SetPull(0, 0, 0);
         Time = 0;
         Flash = 0;
         didName = false;

@@ -52,6 +52,15 @@ public sealed class SettingsPage : Page
             Toggle("alert", "Окно тревоги поверх всех окон", s.AlertWindow, v => s.AlertWindow = v),
             Toggle("sound", "Звуки", s.SoundEnabled, v => s.SoundEnabled = v)
         };
+        if (services.GetCurrentIp() is { CountryCode.Length: > 0 } current && !string.Equals(current.CountryCode, s.HomeCountryCode, StringComparison.OrdinalIgnoreCase))
+        {
+            rows.Insert(2, new ButtonRow($"Считать домашней: {Countries.Describe(current.CountryCode)}") { Id = "home-current", Action = () =>
+            {
+                draft.Working.HomeCountryCode = current.CountryCode;
+                Build();
+            } });
+        }
+
         var volume = new SliderRow("Громкость", 0, 100, 5, s.SoundVolume) { Id = "volume" };
         volume.Changed = () => s.SoundVolume = volume.Value;
         rows.Add(volume);
@@ -63,6 +72,7 @@ public sealed class SettingsPage : Page
             rows.Add(row);
         }
 
+        rows.Add(new ButtonRow("Проверить тревогу") { Id = "test-alert", Action = services.TestAlert });
         rows.Add(new SectionRow("Для скриптов"));
         var status = Toggle("status", "Статус по локальному адресу", s.StatusServerEnabled, v => s.StatusServerEnabled = v, StatusHint(s.StatusPort));
         rows.Add(status);
@@ -71,9 +81,17 @@ public sealed class SettingsPage : Page
         rows.Add(port);
         rows.Add(new SectionRow("Обновления"));
         rows.Add(Toggle("updates", "Проверять новую версию", s.UpdateCheckEnabled, v => s.UpdateCheckEnabled = v, "раз в сутки, запрос к GitHub"));
+        rows.Add(new SectionRow("Резервная копия"));
+        rows.Add(new ButtonRow("Сохранить настройки в файл...") { Id = "backup-export", Action = services.ExportBackup });
+        rows.Add(new ButtonRow("Загрузить настройки из файла...") { Id = "backup-import", Action = services.ImportBackup });
         rows.Add(new SectionRow("Защита"));
         rows.Add(ProtectToggle());
         rows.Add(new NoteRow(ProtectHint));
+        if (!draft.Working.ProtectEnabled)
+        {
+            rows.Add(new NoteRow("Пока защита выключена, пункты ниже недоступны: включите её переключателем выше.") { Id = "protect-lock" });
+        }
+
         rows.Add(Toggle("protect-alarm", "При красной тревоге", s.ProtectOnAlarm, v => s.ProtectOnAlarm = v));
         var outage = Toggle("protect-outage", "При потере связи дольше", s.ProtectOnOutage, v => s.ProtectOnOutage = v);
         outage.Changed += UpdateEnabled;
@@ -173,7 +191,7 @@ public sealed class SettingsPage : Page
             }
 
             draft.Working.ProtectEnabled = false;
-            UpdateEnabled();
+            Build();
         };
         return row;
     }

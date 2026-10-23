@@ -7,10 +7,7 @@ public sealed class HistoryPage : Page
     private const string AllStatuses = "Все статусы";
 
     private readonly PanelServices services;
-    private readonly NoteRow summary = new("");
     private readonly TextRow search = new("Поиск: IP, провайдер, примечание", "", 60) { Id = "search" };
-    private readonly ButtonRow export = new("Экспорт в CSV...") { Id = "export" };
-    private readonly ButtonRow clear = new("Очистить историю...") { Id = "clear" };
     private readonly NoteRow message = new("") { Id = "message" };
     private readonly NoteRow count = new("") { Id = "count" };
     private ChoiceRow? country;
@@ -27,8 +24,11 @@ public sealed class HistoryPage : Page
         : base("История")
     {
         this.services = services;
-        export.Action = Export;
-        clear.Action = Clear;
+        Footer = new[]
+        {
+            new FooterButton("Очистить…", false, Clear, () => TotalCount > 0),
+            new FooterButton("Экспорт CSV", true, Export, () => ShownCount > 0)
+        };
         lastStamp = Stamp();
         Reload(false);
     }
@@ -74,9 +74,6 @@ public sealed class HistoryPage : Page
     {
         var history = services.GetHistory();
         TotalCount = history.Count;
-        var state = services.GetState();
-        state.MigrateLegacy();
-        summary.SetText($"Домашняя страна: {services.GetHome()}. {Summary(state)}");
         countryCodes = HistoryFilter.CountriesIn(history);
         statusValues = HistoryFilter.StatusesIn(history);
         if (countryFilter is not null && !countryCodes.Contains(countryFilter))
@@ -101,12 +98,10 @@ public sealed class HistoryPage : Page
         });
         var entries = Current();
         ShownCount = entries.Count;
-        export.Enabled = entries.Count > 0;
-        clear.Enabled = TotalCount > 0;
-        count.SetText(CountText(entries.Count));
+        count.SetText($"{CountText(entries.Count)} · дом {services.GetHome()}");
         var focusId = Rows.Focus >= 0 && Rows.Focus < Rows.Rows.Count ? Rows.Rows[Rows.Focus].Id : "";
         var scroll = Rows.ScrollY;
-        var rows = new List<Row> { summary, country, status, search, export, clear, message, count };
+        var rows = new List<Row> { country, status, search, message, count };
         rows.AddRange(entries.Take(RowLimit).Select(entry => (Row)new HistoryRow(entry)));
         Rows.Replace(rows);
         if (focusId.Length > 0)
@@ -143,13 +138,6 @@ public sealed class HistoryPage : Page
         return shown > RowLimit ? text + $" (на экране последние {RowLimit}, в CSV уйдёт всё)" : text;
     }
 
-    private static string Summary(MonitorState state)
-    {
-        var references = state.References.Count == 0
-            ? "Эталонных IP пока нет."
-            : "Эталонные IP: " + string.Join(";  ", state.References.Select(r => $"{r.Country} — {IpWatcher.DescribeReferences(new[] { r })}"));
-        return references;
-    }
 
     private void Export()
     {

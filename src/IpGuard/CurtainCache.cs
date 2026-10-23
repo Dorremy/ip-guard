@@ -6,7 +6,7 @@ namespace IpGuard;
 
 public sealed class CurtainCache : IDisposable
 {
-    private const float Refresh = 0.12f;
+    private const float Refresh = 0.03f;
 
     private readonly int gridWidth;
     private readonly int gridHeight;
@@ -15,6 +15,8 @@ public sealed class CurtainCache : IDisposable
     private Bitmap? full;
     private float cachedTime = -10f;
     private float cachedDim = -1f;
+    private float cachedWarm = -1f;
+    private float cachedGlow = -1f;
 
     public CurtainCache(int gridWidth, int gridHeight)
     {
@@ -24,9 +26,11 @@ public sealed class CurtainCache : IDisposable
         small = new Bitmap(gridWidth, gridHeight, PixelFormat.Format32bppArgb);
     }
 
-    public void Draw(Graphics g, int w, int h, float time, float dim)
+    public int Rebuilds { get; private set; }
+
+    public void Draw(Graphics g, int w, int h, float time, float dim, float warm = 0f, float glow = 1f)
     {
-        Ensure(w, h, time, dim);
+        Ensure(w, h, time, dim, warm, glow);
         var mode = g.CompositingMode;
         g.CompositingMode = CompositingMode.SourceCopy;
         g.DrawImageUnscaled(full!, 0, 0);
@@ -39,10 +43,10 @@ public sealed class CurtainCache : IDisposable
         full?.Dispose();
     }
 
-    private void Ensure(int w, int h, float time, float dim)
+    private void Ensure(int w, int h, float time, float dim, float warm, float glow)
     {
         var resized = full is null || full.Width != w || full.Height != h;
-        if (!resized && Math.Abs(time - cachedTime) < Refresh && Math.Abs(dim - cachedDim) < 0.005f)
+        if (!resized && Math.Abs(time - cachedTime) < Refresh && Math.Abs(dim - cachedDim) < 0.005f && Math.Abs(warm - cachedWarm) < 0.005f && Math.Abs(glow - cachedGlow) < 0.005f)
         {
             return;
         }
@@ -53,7 +57,7 @@ public sealed class CurtainCache : IDisposable
             full = new Bitmap(w, h, PixelFormat.Format32bppArgb);
         }
 
-        Curtain.Fill(MemoryMarshal.Cast<int, uint>(pixels.AsSpan()), gridWidth, gridHeight, time, dim);
+        Curtain.Fill(MemoryMarshal.Cast<int, uint>(pixels.AsSpan()), gridWidth, gridHeight, time, dim, warm, glow);
         var data = small.LockBits(new Rectangle(0, 0, gridWidth, gridHeight), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
         for (var y = 0; y < gridHeight; y++)
         {
@@ -72,5 +76,8 @@ public sealed class CurtainCache : IDisposable
 
         cachedTime = time;
         cachedDim = dim;
+        cachedWarm = warm;
+        cachedGlow = glow;
+        Rebuilds++;
     }
 }

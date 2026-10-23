@@ -23,28 +23,22 @@ public sealed class TrayApp : ApplicationContext
     private readonly IpLookup primary = new();
     private readonly Journal journal;
     private string? lastRecord;
-    private readonly ToolStripMenuItem header = new("Проверка...") { Enabled = false };
-    private readonly ToolStripMenuItem reference = new("") { Enabled = false, Visible = false };
-    private readonly ToolStripMenuItem directRoute = new("") { Enabled = false, Visible = false };
-    private readonly ToolStripMenuItem ipv6Route = new("") { Enabled = false, Visible = false };
-    private HistoryForm? historyForm;
-    private AlertForm? alertForm;
+    private ToastWindow? toast;
+    private readonly System.Windows.Forms.Timer alertSound = new() { Interval = 4000 };
+    private string? alertKey;
+    private int alertVariant = 1;
     private readonly QuietMode quiet = new();
     private readonly System.Windows.Forms.Timer quietTimer = new();
     private int networkBurst;
     private bool rerun;
-    private bool settingsOpen;
-    private bool referencesOpen;
     private readonly List<string> restoreNotice = new();
     private readonly StatusServer statusServer = new();
     private readonly string statusPath;
     private StatusSnapshot? lastSnapshot;
     private int statusPortInUse;
     private readonly ProtectionTrigger protection = new();
-    private ProtectForm? protectForm;
     private readonly UpdateChecker updates = new();
     private readonly System.Windows.Forms.Timer updateTimer = new() { Interval = 60 * 60 * 1000 };
-    private readonly ToolStripMenuItem updateAvailable = new("") { Visible = false };
     private ReleaseInfo? availableRelease;
     private NebulaPanel? panel;
     private PanelState panelState = PanelState.Initial;
@@ -83,27 +77,36 @@ public sealed class TrayApp : ApplicationContext
 
         tray.Icon = TrayIcons.For(Status.Unavailable);
         tray.Text = "IpGuard";
-        tray.ContextMenuStrip = BuildMenu();
         tray.MouseClick += (_, e) =>
         {
             if (e.Button == MouseButtons.Left && !settings.SimpleMenu)
             {
                 TogglePanel();
             }
+            else if (e.Button == MouseButtons.Right)
+            {
+                OpenPanelPage("tray");
+            }
         };
         tray.DoubleClick += (_, _) =>
         {
             if (settings.SimpleMenu)
             {
-                ShowHistory();
+                OpenPanelPage("history");
             }
         };
         tray.Visible = true;
         if (restoreNotice.Count > 0)
         {
-            tray.ShowBalloonTip(8000, "IpGuard", string.Join("; ", restoreNotice), ToolTipIcon.Warning);
+            Notify("IpGuard", string.Join("; ", restoreNotice), Tone.Alert);
         }
 
+        alertSound.Tick += (_, _) => PlayAlertSound();
+        quietTimer.Tick += (_, _) =>
+        {
+            quietTimer.Stop();
+            journal.Write("Не беспокоить: время вышло");
+        };
         pollTimer.Interval = Math.Max(15, settings.IntervalSeconds) * 1000;
         pollTimer.Tick += async (_, _) => await CheckAsync(false, 2, "таймер");
         pollTimer.Start();
@@ -128,8 +131,8 @@ public sealed class TrayApp : ApplicationContext
         statusServer.Dispose();
         quietTimer.Dispose();
         updateTimer.Dispose();
-        protectForm?.Dispose();
-        alertForm?.Dispose();
+        alertSound.Dispose();
+        toast?.Dispose();
         panel?.Dispose();
         NetworkChange.NetworkAddressChanged -= OnNetworkChanged;
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
@@ -138,85 +141,6 @@ public sealed class TrayApp : ApplicationContext
         tray.Visible = false;
         tray.Dispose();
         base.ExitThreadCore();
-    }
-
-    private ContextMenuStrip BuildMenu()
-    {
-        var menu = new ContextMenuStrip();
-
-        var check = new ToolStripMenuItem("Проверить сейчас");
-        check.Click += async (_, _) => await CheckAsync(true, 2, "вручную");
-
-        var trust = new ToolStripMenuItem("Принять текущий IP как эталон");
-        trust.Click += async (_, _) => await AcceptCurrentAsReferenceAsync();
-
-        var home = new ToolStripMenuItem("Считать текущую страну домашней");
-        home.Click += async (_, _) =>
-        {
-            var current = monitor.Current;
-            if (current is not null)
-            {
-                settings.HomeCountryCode = current.CountryCode;
-                SaveSettings();
-                journal.Write($"Домашняя страна: {current.CountryCode}");
-                await CheckAsync(true, 1, "домашняя страна");
-            }
-        };
-
-        var history = new ToolStripMenuItem("История...");
-        history.Click += (_, _) => ShowHistory();
-
-        var quietMenu = BuildQuietMenu();
-
-        var referencesItem = new ToolStripMenuItem("Эталоны...");
-        referencesItem.Click += (_, _) => ShowReferences();
-
-        var backupItem = BuildBackupMenu();
-
-        var settingsItem = new ToolStripMenuItem("Настройки...");
-        settingsItem.Click += async (_, _) => await ShowSettingsAsync();
-
-        var folder = new ToolStripMenuItem("Открыть папку с данными");
-        folder.Click += (_, _) => OpenDataFolder();
-
-        updateAvailable.Click += (_, _) => OpenUpdatePage();
-
-        var checkUpdates = new ToolStripMenuItem("Проверить обновления");
-        checkUpdates.Click += async (_, _) => await CheckUpdatesAsync(true);
-
-        var version = new ToolStripMenuItem($"Версия {Application.ProductVersion.Split('+')[0]}") { Enabled = false };
-
-        var log = new ToolStripMenuItem("Открыть журнал");
-        log.Click += (_, _) => OpenJournal();
-
-        var exit = new ToolStripMenuItem("Выход");
-        exit.Click += (_, _) => ExitThread();
-
-        menu.Items.AddRange(new ToolStripItem[]
-        {
-            header,
-            directRoute,
-            ipv6Route,
-            reference,
-            new ToolStripSeparator(),
-            check,
-            trust,
-            home,
-            history,
-            quietMenu,
-            referencesItem,
-            settingsItem,
-            backupItem,
-            new ToolStripSeparator(),
-            folder,
-            log,
-            new ToolStripSeparator(),
-            updateAvailable,
-            checkUpdates,
-            version,
-            exit
-        });
-        return menu;
     }
 
     private void OpenDataFolder()
@@ -237,6 +161,12 @@ public sealed class TrayApp : ApplicationContext
 
     private void TogglePanel()
     {
+        if (panel is { IsDisposed: false, Opened: true, AlertActive: true })
+        {
+            panel.Activate();
+            return;
+        }
+
         if (panel is { IsDisposed: false, Opened: true })
         {
             panel.BeginClose();
@@ -248,14 +178,9 @@ public sealed class TrayApp : ApplicationContext
             return;
         }
 
-        if (panel is null or { IsDisposed: true })
-        {
-            panel = new NebulaPanel(RunPanelCommand, services: BuildServices());
-            panel.Apply(panelState);
-        }
-
-        panel.SetChecking(checking);
-        panel.Open(Cursor.Position);
+        var current = EnsurePanel();
+        current.SetChecking(checking);
+        current.Open(Cursor.Position);
     }
 
     private PanelServices BuildServices() => new()
@@ -285,7 +210,19 @@ public sealed class TrayApp : ApplicationContext
         HistoryStamp = () => HashCode.Combine(state.History.Count, state.History.Count > 0 ? state.History[^1].Time : default),
         ReadJournal = () => journal.Tail(2000),
         JournalStamp = journal.Stamp,
-        OpenJournalFile = OpenJournal
+        OpenJournalFile = OpenJournal,
+        TestAlert = TestAlertNow,
+        Version = ProductVersion,
+        GetRoutes = RouteLines,
+        GetQuietUntil = () => quiet.Until,
+        SetQuiet = SetQuiet,
+        GetUpdateTag = () => availableRelease?.Tag,
+        OpenUpdate = OpenUpdatePage,
+        CheckUpdates = () => _ = CheckUpdatesAsync(true),
+        Restart = RestartApp,
+        Exit = ExitThread,
+        ExportBackup = ExportBackup,
+        ImportBackup = ImportBackup
     };
 
     private static string? AskHistoryPath()
@@ -329,73 +266,6 @@ public sealed class TrayApp : ApplicationContext
         }
     }
 
-    private ToolStripMenuItem BuildQuietMenu()
-    {
-        var root = new ToolStripMenuItem(quiet.Title);
-        var stop = new ToolStripMenuItem("Выключить") { Enabled = false };
-
-        void Apply(TimeSpan? duration)
-        {
-            if (duration is { } span)
-            {
-                quiet.Start(span);
-                quietTimer.Interval = (int)Math.Min(int.MaxValue, span.TotalMilliseconds + 500);
-                quietTimer.Stop();
-                quietTimer.Start();
-                journal.Write($"Не беспокоить: {span.TotalMinutes:0} мин");
-            }
-            else
-            {
-                quiet.Stop();
-                quietTimer.Stop();
-                journal.Write("Не беспокоить: выключено");
-            }
-
-            RefreshQuietMenu(root, stop);
-        }
-
-        foreach (var minutes in new[] { 15, 30, 60 })
-        {
-            var item = new ToolStripMenuItem($"{minutes} минут");
-            item.Click += (_, _) => Apply(TimeSpan.FromMinutes(minutes));
-            root.DropDownItems.Add(item);
-        }
-
-        root.DropDownItems.Add(new ToolStripSeparator());
-        stop.Click += (_, _) => Apply(null);
-        root.DropDownItems.Add(stop);
-
-        quietTimer.Tick += (_, _) =>
-        {
-            quietTimer.Stop();
-            journal.Write("Не беспокоить: время вышло");
-            RefreshQuietMenu(root, stop);
-        };
-        root.DropDownOpening += (_, _) => RefreshQuietMenu(root, stop);
-        return root;
-    }
-
-    private void RefreshQuietMenu(ToolStripMenuItem root, ToolStripMenuItem stop)
-    {
-        root.Text = quiet.Title;
-        stop.Enabled = quiet.Active;
-    }
-
-    private ToolStripMenuItem BuildBackupMenu()
-    {
-        var root = new ToolStripMenuItem("Резервная копия настроек");
-
-        var export = new ToolStripMenuItem("Сохранить в файл...");
-        export.Click += (_, _) => ExportBackup();
-
-        var import = new ToolStripMenuItem("Загрузить из файла...");
-        import.Click += async (_, _) => await ImportBackupAsync();
-
-        root.DropDownItems.Add(export);
-        root.DropDownItems.Add(import);
-        return root;
-    }
-
     private void ExportBackup()
     {
         using var dialog = new SaveFileDialog
@@ -416,15 +286,15 @@ public sealed class TrayApp : ApplicationContext
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            MessageBox.Show($"Не удалось сохранить файл: {e.Message}", "IpGuard", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ShowNotice("Ошибка", $"Не удалось сохранить файл: {e.Message}");
             return;
         }
 
         journal.Write($"Настройки сохранены в файл: {dialog.FileName}");
-        tray.ShowBalloonTip(4000, "IpGuard", "Настройки и эталоны сохранены в файл", ToolTipIcon.Info);
+        Notify("IpGuard", "Настройки и эталоны сохранены в файл", Tone.Calm);
     }
 
-    private async Task ImportBackupAsync()
+    private void ImportBackup()
     {
         using var dialog = new OpenFileDialog
         {
@@ -442,7 +312,7 @@ public sealed class TrayApp : ApplicationContext
         {
             if (new FileInfo(dialog.FileName).Length > SettingsBackup.MaxBytes)
             {
-                MessageBox.Show("Файл слишком большой для резервной копии настроек.", "IpGuard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                ShowNotice("Загрузка настроек", "Файл слишком большой для резервной копии настроек.");
                 return;
             }
 
@@ -450,22 +320,22 @@ public sealed class TrayApp : ApplicationContext
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            MessageBox.Show($"Не удалось прочитать файл: {e.Message}", "IpGuard", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ShowNotice("Ошибка", $"Не удалось прочитать файл: {e.Message}");
             return;
         }
 
         var result = SettingsBackup.Import(text);
         if (result.Data is not { } data)
         {
-            MessageBox.Show(result.Error, "IpGuard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowNotice("Загрузка настроек", result.Error ?? "Файл не подошёл.");
             return;
         }
 
-        if (MessageBox.Show(SettingsBackup.Describe(result), "Загрузка настроек", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
-        {
-            return;
-        }
+        ShowOnPanel(TextPage.Confirm("Загрузка настроек", SettingsBackup.Describe(result), "Загрузить", () => _ = ApplyImportAsync(data, dialog.FileName)));
+    }
 
+    private async Task ApplyImportAsync(BackupData data, string fileName)
+    {
         settings.CopyFrom(data.Settings);
         state.Trusted.Clear();
         state.References.Clear();
@@ -479,7 +349,7 @@ public sealed class TrayApp : ApplicationContext
         SaveSettings();
         Persist();
         ApplyStatusServer();
-        journal.Write($"Настройки загружены из файла: {dialog.FileName}; эталонов: {data.References.Count}");
+        journal.Write($"Настройки загружены из файла: {fileName}; эталонов: {data.References.Count}");
         await CheckAsync(true, 1, "импорт");
     }
 
@@ -512,58 +382,6 @@ public sealed class TrayApp : ApplicationContext
         AppDomain.CurrentDomain.UnhandledException += (_, e) => journal.Write(ErrorText.Format("необработанная ошибка", e.ExceptionObject as Exception));
     }
 
-    private void ShowReferences()
-    {
-        if (referencesOpen)
-        {
-            return;
-        }
-
-        referencesOpen = true;
-        try
-        {
-            using var form = new ReferencesForm(
-                state,
-                () => monitor.Current,
-                () => settings.HomeCountryCode,
-                () =>
-                {
-                    Persist();
-                    journal.Write("Список эталонов изменён");
-                    _ = CheckAsync(true, 1, "эталоны");
-                });
-            form.ShowDialog();
-        }
-        finally
-        {
-            referencesOpen = false;
-        }
-    }
-
-    private async Task ShowSettingsAsync()
-    {
-        if (settingsOpen)
-        {
-            return;
-        }
-
-        settingsOpen = true;
-        try
-        {
-            using var form = new SettingsForm(settings, Autostart.IsEnabled());
-            if (form.ShowDialog() != DialogResult.OK)
-            {
-                return;
-            }
-
-            await ApplySettingsAsync(form.Result, form.AutostartResult);
-        }
-        finally
-        {
-            settingsOpen = false;
-        }
-    }
-
     private async Task ApplySettingsAsync(Settings result, bool autostartResult)
     {
         settings.CopyFrom(result);
@@ -579,7 +397,7 @@ public sealed class TrayApp : ApplicationContext
             catch (Exception e) when (e is UnauthorizedAccessException or System.Security.SecurityException or IOException)
             {
                 journal.Write($"Не удалось изменить автозапуск: {e.Message}");
-                MessageBox.Show("Не удалось изменить автозапуск: Windows не разрешила запись. Остальные настройки сохранены.", "IpGuard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                ShowNotice("Автозапуск", "Не удалось изменить автозапуск: Windows не разрешила запись. Остальные настройки сохранены.");
             }
         }
 
@@ -603,40 +421,153 @@ public sealed class TrayApp : ApplicationContext
 
     private void ShowAlert(Verdict verdict)
     {
-        if (alertForm is null or { IsDisposed: true })
-        {
-            alertForm = new AlertForm(() => settings.SoundEnabled && !quiet.Active);
-        }
-
-        var key = Sounds.KeyFor(verdict.Status);
-        var canAccept = verdict.Status == Status.Changed;
-        alertForm.Raise(verdict, key, key is null ? 1 : settings.SoundVariant(key), canAccept, async () => await AcceptCurrentAsReferenceAsync());
+        var current = EnsurePanel();
+        var work = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 720);
+        alertKey = Sounds.KeyFor(verdict.Status);
+        alertVariant = alertKey is null ? 1 : settings.SoundVariant(alertKey);
+        current.ShowAlert(verdict, verdict.Status == Status.Changed, () => _ = AcceptCurrentAsReferenceAsync(), new Point(work.Right, work.Bottom));
+        alertSound.Start();
+        PlayAlertSound();
         journal.Write($"Окно тревоги: {verdict.Title}");
     }
 
-    private void ShowHistory()
+    private void TestAlertNow()
     {
-        if (historyForm is { IsDisposed: false })
-        {
-            if (historyForm.WindowState == FormWindowState.Minimized)
-            {
-                historyForm.WindowState = FormWindowState.Normal;
-            }
+        var verdict = new Verdict(Status.Changed, "Проба тревоги", "Так выглядит тревога. На самом деле IP не менялся.", false);
+        var work = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 720);
+        alertKey = Sounds.KeyFor(Status.Changed);
+        alertVariant = alertKey is null ? 1 : settings.SoundVariant(alertKey);
+        EnsurePanel().ShowAlert(verdict, false, null, new Point(work.Right, work.Bottom));
+        alertSound.Start();
+        PlayAlertSound();
+        Notify(verdict.Title, verdict.Message, Tone.Alert);
+        journal.Write("Проба тревоги");
+    }
 
-            historyForm.Activate();
+    private void PlayAlertSound()
+    {
+        if (alertKey is not null && settings.SoundEnabled && !quiet.Active)
+        {
+            Sounds.Play(alertKey, alertVariant);
+        }
+    }
+
+    private void OpenPanelPage(string id) => ShowOnPanel(null, id);
+
+    private IReadOnlyList<string> RouteLines()
+    {
+        var info = monitor.Current;
+        var abroad = info is not null && info.CountryCode != settings.HomeCountryCode;
+        var lines = new List<string>();
+        if (abroad && monitor.Proxied)
+        {
+            lines.Add(monitor.DirectInfo is { } direct ? $"Без прокси: {direct.Ip} · {direct.CountryCode}" : "Без прокси: не определён");
+        }
+
+        if (abroad && settings.CheckIpv6)
+        {
+            lines.Add(monitor.Ipv6Info is { } v6
+                ? $"IPv6: {v6.Ip}" + (v6.CountryCode.Length == 2 ? $" · {v6.CountryCode}" : "")
+                : "IPv6: нет");
+        }
+
+        return lines;
+    }
+
+    private void SetQuiet(int minutes)
+    {
+        if (minutes > 0)
+        {
+            var span = TimeSpan.FromMinutes(minutes);
+            quiet.Start(span);
+            quietTimer.Interval = (int)Math.Min(int.MaxValue, span.TotalMilliseconds + 500);
+            quietTimer.Stop();
+            quietTimer.Start();
+            journal.Write($"Не беспокоить: {minutes} мин");
+        }
+        else
+        {
+            quiet.Stop();
+            quietTimer.Stop();
+            journal.Write("Не беспокоить: выключено");
+        }
+    }
+
+    private void RestartApp()
+    {
+        var path = Environment.ProcessPath;
+        if (string.IsNullOrEmpty(path))
+        {
             return;
         }
 
-        historyForm = new HistoryForm(
-            state,
-            () => settings.HomeCountryCode,
-            () =>
+        Process.Start(new ProcessStartInfo("cmd.exe", $"/c ping 127.0.0.1 -n 3 >nul & start \"\" \"{path}\"") { CreateNoWindow = true, UseShellExecute = false });
+        ExitThread();
+    }
+
+    private void ShowNotice(string title, string text) => ShowOnPanel(TextPage.Notice(title, text));
+
+    private void ShowOnPanel(Page? page, string? id = null)
+    {
+        var current = EnsurePanel();
+        if (!current.Visible || !current.Opened)
+        {
+            current.SetChecking(checking);
+            current.Open(Cursor.Position);
+        }
+
+        if (page is not null)
+        {
+            current.ShowPage(page);
+        }
+        else if (id is not null)
+        {
+            current.ShowPage(id);
+        }
+    }
+
+    private NebulaPanel EnsurePanel()
+    {
+        if (panel is null or { IsDisposed: true })
+        {
+            panel = new NebulaPanel(RunPanelCommand, services: BuildServices());
+            panel.AlertDismissed += alertSound.Stop;
+            panel.Apply(panelState);
+        }
+
+        return panel;
+    }
+
+    private void Notify(string title, string message, Tone tone)
+    {
+        if (ToastPolicy.SystemShouldDecideNow())
+        {
+            tray.ShowBalloonTip(6000, title, message, tone == Tone.Calm ? ToolTipIcon.Info : ToolTipIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            if (toast is null or { IsDisposed: true })
             {
-                Persist();
-                journal.Write("История очищена");
-            });
-        historyForm.FormClosed += (_, _) => historyForm = null;
-        historyForm.Show();
+                toast = new ToastWindow();
+                toast.Clicked += () =>
+                {
+                    if (panel is not { IsDisposed: false, Opened: true })
+                    {
+                        TogglePanel();
+                    }
+                };
+            }
+
+            var screen = Screen.PrimaryScreen ?? Screen.AllScreens[0];
+            toast.Present(title, message, tone, screen.Bounds, screen.WorkingArea);
+        }
+        catch (Exception e) when (e is InvalidOperationException or ObjectDisposedException or System.ComponentModel.Win32Exception or ArgumentException)
+        {
+            journal.Write(ErrorText.Format("уведомление", e));
+            tray.ShowBalloonTip(6000, title, message, tone == Tone.Calm ? ToolTipIcon.Info : ToolTipIcon.Warning);
+        }
     }
 
     private void OnNetworkChanged(object? sender, EventArgs e)
@@ -740,20 +671,6 @@ public sealed class TrayApp : ApplicationContext
         journal.Write($"{reason}: {summary}{provider}{leak}{alert}");
     }
 
-    private void ShowRoutes(IpInfo? info)
-    {
-        var abroad = info is not null && info.CountryCode != settings.HomeCountryCode;
-        directRoute.Visible = abroad && monitor.Proxied;
-        directRoute.Text = monitor.DirectInfo is { } direct
-            ? $"Без прокси: {direct.Ip} · {direct.CountryCode}"
-            : "Без прокси: не определён";
-
-        ipv6Route.Visible = abroad && settings.CheckIpv6;
-        ipv6Route.Text = monitor.Ipv6Info is { } v6
-            ? $"IPv6: {v6.Ip}" + (v6.CountryCode.Length == 2 ? $" · {v6.CountryCode}" : "")
-            : "IPv6: нет";
-    }
-
     private void Persist()
     {
         try
@@ -784,10 +701,8 @@ public sealed class TrayApp : ApplicationContext
         {
             settings.LastUpdateCheckUtc = DateTime.UtcNow;
             availableRelease = outcome.Available;
-            updateAvailable.Visible = outcome.Available is not null;
             if (outcome.Available is { } release)
             {
-                updateAvailable.Text = $"Доступна версия {release.Tag}...";
                 journal.Write($"Проверка обновлений: доступна {release.Tag}");
                 if (show)
                 {
@@ -804,7 +719,7 @@ public sealed class TrayApp : ApplicationContext
 
         if (show)
         {
-            tray.ShowBalloonTip(6000, "IpGuard", outcome.Message, outcome.Failed ? ToolTipIcon.Warning : ToolTipIcon.Info);
+            Notify("IpGuard", outcome.Message, outcome.Failed ? Tone.Alert : Tone.Calm);
         }
     }
 
@@ -839,25 +754,27 @@ public sealed class TrayApp : ApplicationContext
             return;
         }
 
-        if (protectForm is { IsDisposed: false })
+        var current = EnsurePanel();
+        if (current.ProtectActive)
         {
             return;
         }
 
-        protectForm = new ProtectForm(
+        var work = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 720);
+        current.ShowProtect(
             text,
             programs,
             settings.ProtectGraceSeconds,
             () => CloseProtectedPrograms(programs),
-            () => journal.Write("Защита: закрытие отменено"));
-        protectForm.Begin();
+            () => journal.Write("Защита: закрытие отменено"),
+            new Point(work.Right, work.Bottom));
     }
 
     private void CloseProtectedPrograms(IReadOnlyList<string> programs)
     {
         var report = ProgramCloser.Close(programs);
         journal.Write($"Защита: {report.Summary}");
-        tray.ShowBalloonTip(6000, "IpGuard", $"Защита: {report.Summary}", ToolTipIcon.Warning);
+        Notify("IpGuard", $"Защита: {report.Summary}", Tone.Alert);
     }
 
     private static string ProductVersion() => Application.ProductVersion.Split('+')[0];
@@ -922,28 +839,21 @@ public sealed class TrayApp : ApplicationContext
             DateTime.UtcNow,
             ProductVersion()));
 
-        if (historyForm is { IsDisposed: false })
-        {
-            historyForm.Reload();
-        }
-
         tray.Icon = TrayIcons.For(verdict.Status);
         var tip = info is null ? "IpGuard: нет связи" : $"{info.CountryCode} {info.Ip} — {Labels.For(verdict.Status)}";
         tray.Text = tip.Length > 63 ? tip[..63] : tip;
-        header.Text = info is null ? "Нет связи" : $"{info.Ip} · {info.Country} · {info.Provider}";
-        ShowRoutes(info);
         var abroad = info is not null && info.CountryCode != settings.HomeCountryCode;
-        reference.Visible = abroad;
+        var note = "";
         if (abroad)
         {
             var references = state.ReferencesFor(info!.CountryCode);
             var text = references.Count == 0
                 ? $"Эталон для {info.CountryCode} не задан"
                 : $"{(references.Count == 1 ? "Эталон" : "Эталоны")} для {info.CountryCode}: {IpWatcher.DescribeReferences(references)}";
-            reference.Text = text.Length > 70 ? text[..69] + "…" : text;
+            note = text.Length > 70 ? text[..69] + "…" : text;
         }
 
-        panelState = PanelState.From(verdict, info, abroad ? reference.Text ?? "" : "");
+        panelState = PanelState.From(verdict, info, note);
         panel?.Apply(panelState);
 
         var alarm = verdict.Status is Status.Changed or Status.Leak;
@@ -952,17 +862,15 @@ public sealed class TrayApp : ApplicationContext
         {
             ShowAlert(verdict);
         }
-        else if (!(alarm && settings.AlertWindow) && alertForm is { IsDisposed: false, Active: true })
+        else if (!(alarm && settings.AlertWindow) && panel is { IsDisposed: false, AlertActive: true })
         {
-            alertForm.Resolve($"{verdict.Title}. {verdict.Message}");
+            alertSound.Stop();
+            panel.ResolveAlert($"{verdict.Title}. {verdict.Message}");
         }
 
         if (plan.Balloon)
         {
-            var icon = verdict.Status is Status.Changed or Status.Leak or Status.VpnOff or Status.Unavailable
-                ? ToolTipIcon.Warning
-                : ToolTipIcon.Info;
-            tray.ShowBalloonTip(6000, verdict.Title, verdict.Message, icon);
+            Notify(verdict.Title, verdict.Message, PanelState.ToneOf(verdict.Status));
         }
 
         if (plan.Sound && Sounds.KeyFor(verdict.Status) is { } key)

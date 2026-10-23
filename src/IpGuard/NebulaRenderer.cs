@@ -9,12 +9,20 @@ public sealed class NebulaRenderer : IDisposable
 {
     public const int LogicalWidth = NebulaLayout.Width;
     public const int LogicalHeight = NebulaLayout.Height;
-    private const float LinkDistance = 60f;
+    private const float TrailKeep = 0.972f;
+    private const float TrailWeight = 0.28f;
+    private const float TrailGain = 0.9f;
+    private const float ArriveDistance = 4f;
+    private const float BokehDepth = 0.975f;
 
     private static readonly Color Pale = Color.FromArgb(205, 216, 235);
 
     private readonly CurtainCache curtain = new(75, 105);
     private readonly SwarmPainter painter = new();
+    private readonly TrailLayer trail = new();
+    private float lastTime;
+    private float sceneOffset;
+    private readonly Random sceneRandom = new();
     private readonly PageLayer pageLayer = new();
     private float fontScale = -1f;
     private Font? ipFont;
@@ -47,12 +55,22 @@ public sealed class NebulaRenderer : IDisposable
 
         var sx = w / (float)LogicalWidth;
         var sy = h / (float)LogicalHeight;
-        using (var g = Graphics.FromImage(target))
+        var elapsed = director.Time - lastTime;
+        lastTime = director.Time;
+        trail.Resize(w, h);
+        if (elapsed < 0f || elapsed > 0.5f)
         {
-            curtain.Draw(g, w, h, director.Time, director.Dim);
+            trail.Clear();
+            sceneOffset = 40f + (float)sceneRandom.NextDouble() * 4000f;
+            elapsed = 0f;
         }
 
-        Splat(target, director, sx, sy);
+        using (var g = Graphics.FromImage(target))
+        {
+            curtain.Draw(g, w, h, director.Time + sceneOffset, director.Dim, director.Warm, director.Glow);
+        }
+
+        Splat(target, director, sx, sy, elapsed);
         using (var g = Graphics.FromImage(target))
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -96,7 +114,7 @@ public sealed class NebulaRenderer : IDisposable
         fontScale = scale;
     }
 
-    private void Splat(Bitmap target, IntroDirector d, float sx, float sy)
+    private void Splat(Bitmap target, IntroDirector d, float sx, float sy, float elapsed)
     {
         painter.Begin(target, sx);
         var f = d.Field;
@@ -109,9 +127,15 @@ public sealed class NebulaRenderer : IDisposable
         var statusColor = Mix(fromColor, toneColor, d.Blend);
         var waveSpeed = d.Checking ? 330f : 140f;
         var dust = d.DustLevel;
+        trail.Decay(MathF.Pow(TrailKeep, elapsed * 30f));
+
+        var info = d.InfoAlpha;
+        var crowd = d.Crowd;
+        var calm = 0.55f + 0.45f * crowd;
+        var trailColor = Mix(Pale, statusColor, 0.4f);
         painter.Splat(f, sx, sy, time, i =>
         {
-            var b = f.Brightness[i] * life;
+            var b = f.Brightness[i] * life * (f.Driven(i) ? 1f : IntroDirector.Presence(i, crowd));
             if (b <= 0.01f)
             {
                 return default;
@@ -119,6 +143,17 @@ public sealed class NebulaRenderer : IDisposable
 
             var status = i < IntroDirector.StatusCount;
             var driven = f.Driven(i);
+            var depth = f.Depth[i];
+            var loose = !(status && driven);
+            if (loose)
+            {
+                b *= (0.3f + 0.7f * depth) * (status ? 0.7f : 1f);
+                if (depth >= BokehDepth && !status)
+                {
+                    return default;
+                }
+            }
+
             var c = Pale;
             if (status)
             {
@@ -148,46 +183,45 @@ public sealed class NebulaRenderer : IDisposable
                 }
             }
 
-            return new Dot(b, c, status && driven ? 0.22f : 0.35f, driven ? (status ? 0.18f : 0.35f) : 0f);
+            if (status && driven && Arrived(f, i))
+            {
+                return new Dot(b, c, 0.22f, 0.18f);
+            }
+
+            var zone = status ? 1f : 1f - 0.7f * info * InStatusBand(f.Y[i]);
+            trail.Deposit(f.X[i] * sx, f.Y[i] * sy, b * TrailWeight * zone * (status ? 1.5f : 1f) * (depth < 0.5f ? 1f : calm));
+            return new Dot(b * 0.3f * zone, c, 0.08f, 0f);
         });
-        DrawLinks(d, sx, sy);
+        painter.AddTrail(trail.Data, trail.Width, trail.Height, trailColor, TrailGain);
+        DrawBokeh(d, sx, sy, life * dust * crowd * crowd);
         painter.End();
     }
 
-    private void DrawLinks(IntroDirector d, float sx, float sy)
+    private void DrawBokeh(IntroDirector d, float sx, float sy, float level)
     {
-        var level = d.LinkLevel;
-        if (level <= 0.01f)
-        {
-            return;
-        }
-
         var f = d.Field;
-        var roam = d.Roamers;
-        var limit = LinkDistance * sx;
-        var thickness = sx >= 1.5f ? 2 : 1;
-        for (var a = 0; a < roam.Count; a++)
+        for (var i = IntroDirector.StatusCount; i < f.Count; i++)
         {
-            var ax = f.X[roam[a]] * sx;
-            var ay = f.Y[roam[a]] * sy;
-            for (var b = a + 1; b < roam.Count; b++)
+            if (f.Depth[i] < BokehDepth)
             {
-                var dx = f.X[roam[b]] * sx - ax;
-                var dy = f.Y[roam[b]] * sy - ay;
-                var dist = MathF.Sqrt(dx * dx + dy * dy);
-                if (dist >= limit)
-                {
-                    continue;
-                }
-
-                var alpha = (int)(130f * (1f - dist / limit) * level);
-                if (alpha >= 4)
-                {
-                    painter.Line(ax, ay, dx, dy, alpha, thickness);
-                }
+                continue;
             }
+
+            var px = (f.X[i] + 5f * MathF.Sin(d.Time * 0.2f + i)) * sx;
+            var py = (f.Y[i] + 5f * MathF.Cos(d.Time * 0.17f + i * 1.3f)) * sy;
+            painter.Bokeh(px, py, sx, 0.11f * level * f.Brightness[i], Pale);
         }
     }
+
+    private static bool Arrived(ParticleField f, int i)
+    {
+        var t = f.TargetOf(i);
+        var dx = t.X - f.X[i];
+        var dy = t.Y - f.Y[i];
+        return dx * dx + dy * dy < ArriveDistance * ArriveDistance;
+    }
+
+    private static float InStatusBand(float y) => 1f - Smooth((y - NebulaLayout.PlaceY - 22f) / 24f);
 
     private void DrawInfo(Graphics g, IntroDirector d, float sx, float sy, float fade)
     {

@@ -16,7 +16,7 @@ public sealed class NebulaPanel : Form
     private const double CloseSeconds = 0.16;
     private const double ShortIntroWindow = 120;
     private const int FastInterval = 15;
-    private const int IdleInterval = 33;
+    private const int IdleInterval = 20;
     private const int ParticleCount = 2800;
 
     private readonly Action<string> run;
@@ -37,8 +37,11 @@ public sealed class NebulaPanel : Form
     private float scale = 1f;
     private bool closing;
     private bool caretOn = true;
+    private bool alertMode;
+    private bool openedByAlert;
+    private int urgent;
+    private bool activateOnShow = true;
     private readonly System.Windows.Forms.Timer focusCheck = new() { Interval = 250 };
-    private string? detachedId;
 
     public NebulaPanel(Action<string> run, Func<bool>? animationsEnabled = null, PanelServices? services = null)
     {
@@ -59,7 +62,7 @@ public sealed class NebulaPanel : Form
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.Opaque | ControlStyles.OptimizedDoubleBuffer, true);
         timer.Tick += (_, _) => Tick();
         focusCheck.Tick += (_, _) => FocusChecked();
-        Deactivate += (_, _) => FocusMayBeLost();
+        Deactivate += (_, _) => NotifyFocusLost();
         pages.Navigated += () => director.Surge(pages.IsOpen ? PageGeometry.Area : Menu.Area(1f));
     }
 
@@ -75,9 +78,13 @@ public sealed class NebulaPanel : Form
 
     public bool Opened => Visible && !closing;
 
-    public NebulaWindow? Detached { get; private set; }
+    public bool AlertActive => alertMode;
 
-    public SwarmBridge? Bridge { get; private set; }
+    public bool ProtectActive => pages.Stack.Any(page => page is ProtectPage { Finished: false });
+
+    public event Action? AlertDismissed;
+
+    protected override bool ShowWithoutActivation => !activateOnShow;
 
     public Func<bool> ForegroundIsOurs { get; set; } = OwnsForeground;
 
@@ -124,15 +131,13 @@ public sealed class NebulaPanel : Form
         state = next;
         director.SetState(next);
         AccessibleName = next.Label;
-        var tone = PanelState.ToneOf(next.Status);
-        Detached?.SetTone(tone);
-        Bridge?.SetTone(tone);
     }
 
     public void SetChecking(bool checking) => director.Checking = checking;
 
-    public void Open(Point cursor)
+    public void Open(Point cursor, bool activate = true)
     {
+        activateOnShow = activate;
         var screen = Screen.FromPoint(cursor);
         float dpi;
         using (var g = CreateGraphics())
@@ -172,7 +177,11 @@ public sealed class NebulaPanel : Form
             Show();
         }
 
-        Activate();
+        if (activate)
+        {
+            Activate();
+        }
+
         clock.Restart();
         lastTick = 0;
         timer.Interval = FastInterval;
@@ -189,7 +198,6 @@ public sealed class NebulaPanel : Form
 
         closing = true;
         LastClosedUtc = DateTime.UtcNow;
-        CloseDetached();
         open.StartFromCurrent(0, CloseSeconds, Easing.InCubic);
     }
 
@@ -261,12 +269,6 @@ public sealed class NebulaPanel : Form
         var key = keyData & Keys.KeyCode;
         if (key == Keys.Escape)
         {
-            if (Detached is not null)
-            {
-                CloseDetached();
-                return true;
-            }
-
             BeginClose();
             return true;
         }
@@ -296,14 +298,10 @@ public sealed class NebulaPanel : Form
                 run(id);
                 return;
             case "settings":
-                pages.Push(new SettingsPage(services));
-                return;
             case "references":
-                pages.Push(new ReferencesPage(services));
-                return;
             case "history":
             case "journal":
-                OpenDetached(id);
+                ShowPage(id);
                 return;
         }
 
@@ -311,71 +309,8 @@ public sealed class NebulaPanel : Form
         BeginInvoke(() => run(id));
     }
 
-    private void OpenDetached(string id)
+    public void NotifyFocusLost()
     {
-        if (Detached is { IsDisposed: false } existing && detachedId == id)
-        {
-            existing.Activate();
-            return;
-        }
-
-        DropDetached();
-        Page page = id == "history" ? new HistoryPage(services) : new JournalPage(services);
-        var window = new NebulaWindow(page);
-        Detached = window;
-        detachedId = id;
-        var tone = PanelState.ToneOf(state.Status);
-        window.SetTone(tone);
-        window.Deactivate += (_, _) => FocusMayBeLost();
-        window.FormClosed += (_, _) => DetachedClosed(window);
-        window.Open(Bounds, Screen.FromRectangle(Bounds).WorkingArea);
-        Bridge ??= new SwarmBridge();
-        Bridge.SetTone(tone);
-        Bridge.Begin(Bounds, window.Bounds);
-    }
-
-    private void CloseDetached()
-    {
-        Detached?.BeginClose();
-        Bridge?.Finish();
-    }
-
-    private void DropDetached()
-    {
-        var old = Detached;
-        Detached = null;
-        detachedId = null;
-        Bridge?.Finish();
-        if (old is not null && !old.IsDisposed)
-        {
-            old.Close();
-        }
-    }
-
-    private void DetachedClosed(NebulaWindow window)
-    {
-        if (!ReferenceEquals(Detached, window))
-        {
-            return;
-        }
-
-        Detached = null;
-        detachedId = null;
-        Bridge?.Finish();
-        if (Visible && !closing && !IsDisposed)
-        {
-            Activate();
-        }
-    }
-
-    private void FocusMayBeLost()
-    {
-        if (Detached is null)
-        {
-            BeginClose();
-            return;
-        }
-
         if (!IsHandleCreated || IsDisposed)
         {
             return;
@@ -393,9 +328,132 @@ public sealed class NebulaPanel : Form
             return;
         }
 
-        if (!ForegroundIsOurs())
+        if (!alertMode && !ForegroundIsOurs())
         {
             BeginClose();
+        }
+    }
+
+    public void ShowPage(string id)
+    {
+        Page? page = id switch
+        {
+            "settings" => new SettingsPage(services),
+            "references" => new ReferencesPage(services),
+            "history" => new HistoryPage(services),
+            "journal" => new JournalPage(services),
+            "tray" => new TrayPage(services, () => state),
+            _ => null
+        };
+        if (page is not null)
+        {
+            ShowPage(page);
+        }
+    }
+
+    public void ShowPage(Page page)
+    {
+        if (pages.IsOpen && !alertMode)
+        {
+            pages.Clear();
+        }
+
+        pages.Push(page);
+    }
+
+    public void ShowAlert(Verdict verdict, bool canAccept, Action? accept, Point near)
+    {
+        if (alertMode && pages.Current is AlertPage existing)
+        {
+            existing.Show(verdict.Title, verdict.Message, canAccept, () => accept?.Invoke());
+            pages.Touch();
+            return;
+        }
+
+        if (pages.Current is ProtectPage)
+        {
+            return;
+        }
+
+        BeginUrgent(near);
+        pages.Push(new AlertPage(verdict.Title, verdict.Message, canAccept, () => accept?.Invoke(), DismissAlert));
+    }
+
+    public void ShowProtect(string reason, IReadOnlyList<string> programs, int seconds, Action onClose, Action onCancel, Point near)
+    {
+        BeginUrgent(near);
+        pages.Push(new ProtectPage(reason, programs, seconds, onClose, onCancel, () => Urgent(-1)));
+    }
+
+    public void ResolveAlert(string text)
+    {
+        if (alertMode && pages.Current is AlertPage { Resolved: false } page)
+        {
+            page.Resolve(text);
+            pages.Touch();
+        }
+    }
+
+    private void BeginUrgent(Point near)
+    {
+        if (!Visible || closing)
+        {
+            openedByAlert = true;
+            alertMode = true;
+            urgent = 0;
+            Open(near, false);
+        }
+        else if (!alertMode)
+        {
+            openedByAlert = false;
+        }
+
+        alertMode = true;
+        urgent++;
+    }
+
+    private void Urgent(int delta)
+    {
+        urgent = Math.Max(0, urgent + delta);
+        if (urgent == 0 && alertMode)
+        {
+            alertMode = false;
+            if (openedByAlert)
+            {
+                openedByAlert = false;
+                BeginClose();
+            }
+        }
+    }
+
+    private void DismissAlert()
+    {
+        AlertDismissed?.Invoke();
+        Urgent(-1);
+    }
+
+    private void TearDownUrgent()
+    {
+        var hadAlert = false;
+        foreach (var page in pages.Stack.ToList())
+        {
+            switch (page)
+            {
+                case ProtectPage protect:
+                    protect.Abort();
+                    break;
+                case AlertPage:
+                    hadAlert = true;
+                    break;
+            }
+        }
+
+        alertMode = false;
+        openedByAlert = false;
+        urgent = 0;
+        if (hadAlert)
+        {
+            AlertDismissed?.Invoke();
         }
     }
 
@@ -429,13 +487,9 @@ public sealed class NebulaPanel : Form
         director.Step(dt);
         open.Update(dt);
         pages.Step(dt);
+        pages.Tick(now);
         input.Tick(now);
         caretOn = (long)(now * 2) % 2 == 0;
-        if (Detached is { IsDisposed: false } window)
-        {
-            Bridge?.Track(Bounds, window.Bounds);
-        }
-
         if (placement is { } p)
         {
             var t = open.Value;
@@ -471,13 +525,14 @@ public sealed class NebulaPanel : Form
         timer.Stop();
         clock.Stop();
         input.Reset();
-        CloseDetached();
+        focusCheck.Stop();
         if (closing || Visible)
         {
             LastClosedUtc = DateTime.UtcNow;
         }
 
         closing = false;
+        TearDownUrgent();
         pages.Clear();
         Hide();
     }
@@ -586,9 +641,6 @@ public sealed class NebulaPanel : Form
         {
             timer.Dispose();
             focusCheck.Dispose();
-            DropDetached();
-            Bridge?.Dispose();
-            Bridge = null;
             renderer.Dispose();
             buffer?.Dispose();
         }

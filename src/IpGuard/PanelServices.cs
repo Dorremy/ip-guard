@@ -35,6 +35,30 @@ public sealed class PanelServices
     public Action OpenJournalFile { get; init; } = () => { };
 
     public Action<string> CopyText { get; init; } = ClipboardText.TrySet;
+
+    public Action TestAlert { get; init; } = () => { };
+
+    public Func<string> Version { get; init; } = () => "";
+
+    public Func<IReadOnlyList<string>> GetRoutes { get; init; } = () => Array.Empty<string>();
+
+    public Func<DateTime?> GetQuietUntil { get; init; } = () => null;
+
+    public Action<int> SetQuiet { get; init; } = _ => { };
+
+    public Func<string?> GetUpdateTag { get; init; } = () => null;
+
+    public Action OpenUpdate { get; init; } = () => { };
+
+    public Action CheckUpdates { get; init; } = () => { };
+
+    public Action Restart { get; init; } = () => { };
+
+    public Action Exit { get; init; } = () => { };
+
+    public Action ExportBackup { get; init; } = () => { };
+
+    public Action ImportBackup { get; init; } = () => { };
 }
 
 public static class ClipboardText

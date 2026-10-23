@@ -108,6 +108,8 @@ public sealed class PageHost
 
     public int Version { get; private set; }
 
+    public void Touch() => Version++;
+
     public event Action? Navigated;
 
     public int FooterHover
