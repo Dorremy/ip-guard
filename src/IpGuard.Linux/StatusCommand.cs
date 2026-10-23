@@ -21,12 +21,7 @@ public static class StatusCommand
             return 1;
         }
 
-        var age = context.UtcNow() - report.UpdatedUtc;
-        if (age < TimeSpan.Zero)
-        {
-            age = TimeSpan.Zero;
-        }
-
+        var age = AgeOf(report, context.UtcNow());
         var stale = age >= FreshFor;
         context.Out.WriteLine(report.Title);
         context.Out.WriteLine(Place(report));
@@ -59,7 +54,13 @@ public static class StatusCommand
         return $"{(int)age.TotalDays} дн назад";
     }
 
-    private static string Place(Report report)
+    public static TimeSpan AgeOf(StatusReport report, DateTime nowUtc)
+    {
+        var age = nowUtc - report.UpdatedUtc;
+        return age < TimeSpan.Zero ? TimeSpan.Zero : age;
+    }
+
+    public static string Place(StatusReport report)
     {
         if (string.IsNullOrEmpty(report.Ip))
         {
@@ -70,7 +71,7 @@ public static class StatusCommand
         return string.Join(" · ", new[] { report.Ip, country, report.Provider }.Where(part => !string.IsNullOrWhiteSpace(part)));
     }
 
-    private static bool TryRead(string path, out Report report)
+    public static bool TryRead(string path, out StatusReport report)
     {
         report = default!;
         try
@@ -87,13 +88,17 @@ public static class StatusCommand
                 return false;
             }
 
-            report = new Report(
+            report = new StatusReport(
                 ok.GetBoolean(),
+                Text(root, "state"),
                 Text(root, "title"),
+                Text(root, "message"),
                 Text(root, "ip"),
                 Text(root, "countryCode"),
                 Text(root, "country"),
                 Text(root, "provider"),
+                Text(root, "leak"),
+                Texts(root, "references"),
                 time.ToUniversalTime());
             return true;
         }
@@ -106,5 +111,29 @@ public static class StatusCommand
     private static string Text(JsonElement root, string name) =>
         root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
 
-    private sealed record Report(bool Ok, string Title, string Ip, string CountryCode, string Country, string Provider, DateTime UpdatedUtc);
+    private static IReadOnlyList<string> Texts(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<string>();
+        }
+
+        return value.EnumerateArray()
+            .Where(item => item.ValueKind == JsonValueKind.String)
+            .Select(item => item.GetString() ?? "")
+            .ToList();
+    }
 }
+
+public sealed record StatusReport(
+    bool Ok,
+    string State,
+    string Title,
+    string Message,
+    string Ip,
+    string CountryCode,
+    string Country,
+    string Provider,
+    string Leak,
+    IReadOnlyList<string> References,
+    DateTime UpdatedUtc);

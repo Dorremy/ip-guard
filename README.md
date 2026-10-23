@@ -2,7 +2,7 @@
 
 ![IpGuard](docs/hero.png)
 
-Программа для трея Windows. Следит за внешним IP-адресом и сразу сообщает, если он изменился, отключился VPN или трафик пошёл мимо него. Для Linux есть версия без окна, см. раздел «Linux».
+Программа для трея Windows. Следит за внешним IP-адресом и сразу сообщает, если он изменился, отключился VPN или трафик пошёл мимо него. Для Linux и для работы в терминале есть консольная версия `ipguard`, см. раздел «Терминал и Linux».
 
 ## Что умеет
 
@@ -105,9 +105,26 @@ curl -fs http://127.0.0.1:47831/ok > /dev/null || exit 1
 
 Программа обращается только к сервисам определения IP (2ip.io, ipwho.is, ipinfo.io, ifconfig.co, api6.ipify.org) и к `api.github.com` за номером последней версии: сама раз в сутки и по кнопке «Проверить обновления». Данные остаются на вашем компьютере.
 
-## Linux
+## Терминал и Linux
 
-На Linux IpGuard работает службой без окна: те же проверки, журнал и статус для скриптов, уведомления через `notify-send`.
+Консольная версия `ipguard` делает те же проверки, ведёт тот же журнал и пишет тот же статус для скриптов, только без окна. Есть сборки для Windows (`ipguard-windows-x64.exe`) и Linux (`ipguard-linux-x64`, `ipguard-linux-arm64`).
+
+`ipguard watch` показывает состояние прямо в терминале и обновляет его каждую секунду: статус, адрес, страну, провайдера, последние записи истории и журнала. Если IpGuard уже работает (окно в Windows или служба в Linux), `watch` только показывает его данные. Если нет, мониторинг идёт в этом окне терминала, пока оно открыто. Клавиши:
+
+| Клавиша | Что делает |
+|---|---|
+| `c` | Проверить сейчас, если мониторинг идёт в этом окне |
+| `t` | Добавить текущий IP в эталоны |
+| `h` | Задать домашнюю страну |
+| `q`, `Esc` | Выход |
+
+Пока в Windows открыто окно IpGuard, `t` и `h` в терминале отключены: эталоны и страну меняйте в окне. `ipguard watch --once` печатает один экран и выходит. Цвета отключает переменная `NO_COLOR`.
+
+В Windows скачайте `ipguard-windows-x64.exe`, переименуйте в `ipguard.exe`, если удобнее, и запускайте из PowerShell или Windows Terminal. Данные общие с `IpGuard.exe`.
+
+### Служба в Linux
+
+На Linux IpGuard работает службой systemd, уведомления приходят через `notify-send`.
 
 1. Скачайте `ipguard-linux-x64` (или `ipguard-linux-arm64`) со страницы [Releases](../../releases).
 2. `install -Dm 755 ipguard-linux-x64 ~/.local/bin/ipguard`
@@ -119,6 +136,7 @@ curl -fs http://127.0.0.1:47831/ok > /dev/null || exit 1
 | Команда | Что делает |
 |---|---|
 | `ipguard run` | Запускает службу, работает до остановки. Команда по умолчанию |
+| `ipguard watch` | Показывает состояние в терминале, см. выше |
 | `ipguard status` | Печатает текущее состояние. Код выхода 0, если IP совпадает с эталоном и статус свежее двух минут, иначе 1 |
 | `ipguard trust [подпись]` | Добавляет текущий IP в эталоны своей страны |
 | `ipguard home XX` | Задаёт домашнюю страну двумя латинскими буквами, например `RU` |
@@ -140,7 +158,7 @@ ipguard status >/dev/null && ./my-program
 
 Нужен [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
 
-Логика (проверки, эталоны, история, статус для скриптов) лежит в `src/IpGuard.Core` и не зависит от Windows. Окно и трей находятся в `src/IpGuard`.
+Логика (проверки, эталоны, история, статус для скриптов) лежит в `src/IpGuard.Core` и не зависит от Windows. Окно и трей находятся в `src/IpGuard`, консольная версия для Linux и Windows — в `src/IpGuard.Linux`.
 
 ```bash
 dotnet publish src/IpGuard -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o dist
@@ -152,7 +170,7 @@ dotnet publish src/IpGuard -c Release -r win-x64 --self-contained -p:PublishSing
 dotnet publish src/IpGuard -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o dist-light
 ```
 
-Сборка для Linux (для ARM замените `linux-x64` на `linux-arm64`):
+Консольная версия (для ARM замените `linux-x64` на `linux-arm64`, для Windows — на `win-x64`):
 
 ```bash
 dotnet publish src/IpGuard.Linux -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o dist-linux

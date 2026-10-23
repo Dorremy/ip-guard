@@ -98,3 +98,14 @@ public sealed class NotifySendNotifier : INotifier
         report(message);
     }
 }
+
+public sealed class NullNotifier : INotifier
+{
+    public Task SendAsync(string title, string body, bool critical) => Task.CompletedTask;
+}
+
+public static class NotifierFactory
+{
+    public static INotifier Create(Action<string> report) =>
+        OperatingSystem.IsWindows() ? new NullNotifier() : new NotifySendNotifier(new ProcessRunner(), report);
+}

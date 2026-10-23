@@ -11,7 +11,11 @@ internal static class Program
         var paths = new DataPaths(DataFolder.Current());
         var version = ProductVersion();
         var context = new CliContext(paths, Console.Out, Console.Error, () => DateTime.UtcNow, () => new IpLookup(), version);
-        return Cli.ExecuteAsync(args, context, () => RunServiceAsync(paths, version)).GetAwaiter().GetResult();
+        return Cli.ExecuteAsync(
+            args,
+            context,
+            () => RunServiceAsync(paths, version),
+            once => WatchCommand.RunAsync(context, once, () => ServiceHost.CreateDaemon(paths, version))).GetAwaiter().GetResult();
     }
 
     private static async Task<int> RunServiceAsync(DataPaths paths, string version)
@@ -27,24 +31,7 @@ internal static class Program
         using var term = PosixSignalRegistration.Create(PosixSignal.SIGTERM, context => Stop(context, stop));
         using var interrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, context => Stop(context, stop));
 
-        var primary = new IpLookup();
-        using var daemon = new Daemon(new DaemonOptions(
-            paths,
-            primary,
-            () => primary.PausedSources,
-            IpLookup.Direct(),
-            new Ipv6Lookup(),
-            IpLookup.SystemProxyActive,
-            report => new NotifySendNotifier(new ProcessRunner(), report),
-            version));
-        var journal = new Journal(paths.Log);
-        TaskScheduler.UnobservedTaskException += (_, e) =>
-        {
-            journal.Write(ErrorText.Format("фоновая задача", e.Exception));
-            e.SetObserved();
-        };
-        AppDomain.CurrentDomain.UnhandledException += (_, e) => journal.Write(ErrorText.Format("необработанная ошибка", e.ExceptionObject as Exception));
-
+        using var daemon = ServiceHost.CreateDaemon(paths, version);
         _ = daemon.Start();
         try
         {

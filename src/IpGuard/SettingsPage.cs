@@ -76,7 +76,7 @@ public sealed class SettingsPage : Page
         rows.Add(new SectionRow("Для скриптов"));
         var status = Toggle("status", "Статус по локальному адресу", s.StatusServerEnabled, v => s.StatusServerEnabled = v, StatusHint(s.StatusPort));
         rows.Add(status);
-        var port = Stepper("port", "Порт", SettingsForm.MinPort, SettingsForm.MaxPort, 1, SettingsForm.ClampPort(s.StatusPort), v => s.StatusPort = v, "Порт", "Порт для локального адреса статуса, от 1024 до 65535:");
+        var port = Stepper("port", "Порт", SettingsRules.MinPort, SettingsRules.MaxPort, 1, SettingsRules.ClampPort(s.StatusPort), v => s.StatusPort = v, "Порт", "Порт для локального адреса статуса, от 1024 до 65535:");
         port.Changed += () => status.Hint = StatusHint(port.Value);
         rows.Add(port);
         rows.Add(new SectionRow("Обновления"));
@@ -134,7 +134,7 @@ public sealed class SettingsPage : Page
     }
 
     private StepperRow Interval() =>
-        Stepper("interval", "Интервал проверки, с", SettingsForm.MinInterval, SettingsForm.MaxInterval, 15, SettingsForm.ClampInterval(draft.Working.IntervalSeconds), v => draft.Working.IntervalSeconds = v, "Интервал проверки", "Секунд между проверками, от 15 до 3600:");
+        Stepper("interval", "Интервал проверки, с", SettingsRules.MinInterval, SettingsRules.MaxInterval, 15, SettingsRules.ClampInterval(draft.Working.IntervalSeconds), v => draft.Working.IntervalSeconds = v, "Интервал проверки", "Секунд между проверками, от 15 до 3600:");
 
     private ChoiceRow Outage()
     {
@@ -255,5 +255,5 @@ public sealed class SettingsPage : Page
         _ => null
     };
 
-    private static string StatusHint(int port) => $"http://127.0.0.1:{SettingsForm.ClampPort(port)}/status, только этот компьютер";
+    private static string StatusHint(int port) => $"http://127.0.0.1:{SettingsRules.ClampPort(port)}/status, только этот компьютер";
 }

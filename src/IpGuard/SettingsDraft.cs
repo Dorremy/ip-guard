@@ -17,7 +17,7 @@ public sealed class SettingsDraft
 
     public SettingsDraft(Settings current, bool autostart)
     {
-        Working = SettingsForm.Clone(current);
+        Working = SettingsRules.Clone(current);
         Autostart = autostart;
     }
 
@@ -62,8 +62,8 @@ public sealed class SettingsDraft
 
     public Settings Result()
     {
-        Working.IntervalSeconds = SettingsForm.ClampInterval(Working.IntervalSeconds);
-        Working.StatusPort = SettingsForm.ClampPort(Working.StatusPort);
+        Working.IntervalSeconds = SettingsRules.ClampInterval(Working.IntervalSeconds);
+        Working.StatusPort = SettingsRules.ClampPort(Working.StatusPort);
         Working.ProtectOutageSeconds = Math.Clamp(Working.ProtectOutageSeconds, 5, 3600);
         Working.ProtectGraceSeconds = Math.Clamp(Working.ProtectGraceSeconds, 0, 120);
         Working.SoundVolume = Math.Clamp(Working.SoundVolume, 0, 100);
