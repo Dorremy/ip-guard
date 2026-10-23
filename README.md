@@ -2,7 +2,7 @@
 
 ![IpGuard](docs/hero.png)
 
-Программа для трея Windows. Следит за внешним IP-адресом и сразу сообщает, если он изменился, отключился VPN или трафик пошёл мимо него.
+Программа для трея Windows. Следит за внешним IP-адресом и сразу сообщает, если он изменился, отключился VPN или трафик пошёл мимо него. Для Linux есть версия без окна, см. раздел «Linux».
 
 ## Что умеет
 
@@ -105,9 +105,42 @@ curl -fs http://127.0.0.1:47831/ok > /dev/null || exit 1
 
 Программа обращается только к сервисам определения IP (2ip.io, ipwho.is, ipinfo.io, ifconfig.co, api6.ipify.org) и к `api.github.com` за номером последней версии: сама раз в сутки и по кнопке «Проверить обновления». Данные остаются на вашем компьютере.
 
+## Linux
+
+На Linux IpGuard работает службой без окна: те же проверки, журнал и статус для скриптов, уведомления через `notify-send`.
+
+1. Скачайте `ipguard-linux-x64` (или `ipguard-linux-arm64`) со страницы [Releases](../../releases).
+2. `install -Dm 755 ipguard-linux-x64 ~/.local/bin/ipguard`
+3. `mkdir -p ~/.config/systemd/user`
+4. `curl -fsSL -o ~/.config/systemd/user/ipguard.service https://raw.githubusercontent.com/Dorremy/ip-guard/main/packaging/linux/ipguard.service` (или `cp packaging/linux/ipguard.service ~/.config/systemd/user/` из клона репозитория)
+5. `systemctl --user daemon-reload`
+6. `systemctl --user enable --now ipguard`
+
+| Команда | Что делает |
+|---|---|
+| `ipguard run` | Запускает службу, работает до остановки. Команда по умолчанию |
+| `ipguard status` | Печатает текущее состояние. Код выхода 0, если IP совпадает с эталоном и статус свежее двух минут, иначе 1 |
+| `ipguard trust [подпись]` | Добавляет текущий IP в эталоны своей страны |
+| `ipguard home XX` | Задаёт домашнюю страну двумя латинскими буквами, например `RU` |
+| `ipguard version` | Показывает версию |
+
+Уведомления приходят, если установлен `notify-send` и есть графический сеанс. Если их нет, выполните `systemctl --user import-environment DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS` и перезапустите службу. Без сеанса записи попадают только в журнал.
+
+Данные лежат в `~/.config/IpGuard`, другую папку задаёт `IPGUARD_DATA_DIR`. Вывод службы смотрите через `journalctl --user -u ipguard`, журнал программы лежит в `~/.config/IpGuard/log.txt`. На одну папку данных запускается одна служба.
+
+Прокси берётся из переменных `https_proxy`, `http_proxy`, `all_proxy`.
+
+Статус для скриптов работает как в Windows: `status.json` всегда, адреса `http://127.0.0.1:47831/status` и `/ok` при `"StatusServerEnabled": true` в `settings.json`. Интервал проверки задаёт `IntervalSeconds` там же. `ipguard status` возвращает код 0 или 1, поэтому его можно ставить перед запуском программы:
+
+```bash
+ipguard status >/dev/null && ./my-program
+```
+
 ## Сборка из исходников
 
 Нужен [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
+
+Логика (проверки, эталоны, история, статус для скриптов) лежит в `src/IpGuard.Core` и не зависит от Windows. Окно и трей находятся в `src/IpGuard`.
 
 ```bash
 dotnet publish src/IpGuard -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o dist
@@ -117,6 +150,12 @@ dotnet publish src/IpGuard -c Release -r win-x64 --self-contained -p:PublishSing
 
 ```bash
 dotnet publish src/IpGuard -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o dist-light
+```
+
+Сборка для Linux (для ARM замените `linux-x64` на `linux-arm64`):
+
+```bash
+dotnet publish src/IpGuard.Linux -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o dist-linux
 ```
 
 ## Лицензия

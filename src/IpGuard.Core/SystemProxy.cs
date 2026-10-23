@@ -14,6 +14,11 @@ public static class SystemProxy
             return HttpClient.DefaultProxy;
         }
 
+        if (!OperatingSystem.IsWindows())
+        {
+            return null;
+        }
+
         using var key = Registry.CurrentUser.OpenSubKey(KeyPath);
         var enabled = key?.GetValue("ProxyEnable") is int value ? value : 0;
         var address = Parse(enabled, key?.GetValue("ProxyServer") as string);
@@ -59,6 +64,8 @@ public static class SystemProxy
     }
 
     private static bool HasEnvironmentProxy() =>
-        new[] { "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy" }
+        (OperatingSystem.IsWindows()
+            ? new[] { "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy" }
+            : new[] { "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy" })
             .Any(name => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(name)));
 }

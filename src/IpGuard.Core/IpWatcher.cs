@@ -22,6 +22,8 @@ public sealed class IpWatcher
 
     public TimeSpan? CurrentOutage => offlineSince is { } since ? now() - since : null;
 
+    public string ReferenceHint { get; init; } = "Чтобы запомнить этот IP, откройте «Эталоны» и нажмите «Добавить текущий IP».";
+
     public IpWatcher(MonitorState state, Func<string> homeCountry, Func<DateTime>? now = null, Func<TimeSpan>? outageThreshold = null)
     {
         this.state = state;
@@ -198,7 +200,7 @@ public sealed class IpWatcher
             return new Verdict(
                 Status.NoReference,
                 "Эталон не задан",
-                $"{place}. Чтобы запомнить этот IP, выберите в меню трея «Принять текущий IP как эталон»",
+                $"{place}. {ReferenceHint}",
                 pending);
         }
 

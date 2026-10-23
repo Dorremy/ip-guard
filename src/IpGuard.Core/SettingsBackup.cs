@@ -143,7 +143,7 @@ public static class SettingsBackup
         }
 
         result.HomeCountryCode = country;
-        result.IntervalSeconds = Clamp(source.IntervalSeconds, SettingsForm.MinInterval, SettingsForm.MaxInterval, 15, "Интервал проверки", notes);
+        result.IntervalSeconds = Clamp(source.IntervalSeconds, SettingsRules.MinInterval, SettingsRules.MaxInterval, 15, "Интервал проверки", notes);
         result.SoundVolume = Clamp(source.SoundVolume, 0, 100, 100, "Громкость", notes);
         result.ProtectOutageSeconds = Clamp(source.ProtectOutageSeconds, 5, 3600, 30, "Время потери связи для защиты", notes);
         result.ProtectGraceSeconds = Clamp(source.ProtectGraceSeconds, 0, 120, 10, "Время на отмену", notes);
@@ -154,17 +154,17 @@ public static class SettingsBackup
             result.OutageSeconds = 30;
         }
 
-        if (source.StatusPort is < SettingsForm.MinPort or > SettingsForm.MaxPort)
+        if (source.StatusPort is < SettingsRules.MinPort or > SettingsRules.MaxPort)
         {
             notes.Add("Порт для скриптов вне допустимого диапазона, возвращён 47831");
             result.StatusPort = new Settings().StatusPort;
         }
 
-        var kinds = Sounds.Kinds.Select(kind => kind.Key).ToHashSet();
+        var kinds = SoundCatalog.Kinds.Select(kind => kind.Key).ToHashSet();
         result.Sounds = new Dictionary<string, int>();
         foreach (var (key, variant) in source.Sounds ?? new Dictionary<string, int>())
         {
-            if (kinds.Contains(key) && variant >= 1 && variant <= Sounds.Variants)
+            if (kinds.Contains(key) && variant >= 1 && variant <= SoundCatalog.Variants)
             {
                 result.Sounds[key] = variant;
             }
@@ -177,14 +177,14 @@ public static class SettingsBackup
         result.ProtectPrograms = new List<string>();
         foreach (var raw in (source.ProtectPrograms ?? new List<string>()).Take(MaxPrograms * 2))
         {
-            var name = ProgramCloser.Normalize(raw);
+            var name = ProgramNames.Normalize(raw);
             if (name.Length == 0 || name.Length > 64 || name.IndexOfAny(new[] { '\\', '/', ':', '*', '?', '"', '<', '>', '|' }) >= 0)
             {
                 notes.Add("Пропущено недопустимое имя программы");
                 continue;
             }
 
-            if (ProgramCloser.IsProtected(name))
+            if (ProgramNames.IsProtected(name))
             {
                 notes.Add($"Программа «{name}» пропущена: она нужна системе или самой IpGuard");
                 continue;

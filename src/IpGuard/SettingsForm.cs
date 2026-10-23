@@ -2,10 +2,10 @@ namespace IpGuard;
 
 public sealed class SettingsForm : Form
 {
-    public const int MinInterval = 15;
-    public const int MaxInterval = 3600;
-    public const int MinPort = 1024;
-    public const int MaxPort = 65535;
+    public const int MinInterval = SettingsRules.MinInterval;
+    public const int MaxInterval = SettingsRules.MaxInterval;
+    public const int MinPort = SettingsRules.MinPort;
+    public const int MaxPort = SettingsRules.MaxPort;
 
     private static readonly (int Seconds, string Title)[] OutageChoices =
     {

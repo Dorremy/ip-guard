@@ -3,3 +3,5 @@ obj/
 dist/
 .vs/
 *.user
+dist-light/
+dist-linux/

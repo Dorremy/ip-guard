@@ -121,7 +121,7 @@ public sealed class Settings
     }
 
     public int SoundVariant(string key) =>
-        Sounds.TryGetValue(key, out var variant) && variant >= 1 && variant <= IpGuard.Sounds.Variants ? variant : 1;
+        Sounds.TryGetValue(key, out var variant) && variant >= 1 && variant <= SoundCatalog.Variants ? variant : 1;
 }
 
 public static class Labels

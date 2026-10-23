@@ -8,11 +8,15 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>IpGuard</AssemblyName>
     <RootNamespace>IpGuard</RootNamespace>
-    <Version>0.9.0</Version>
+    <Version>0.10.0</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
     <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\IpGuard.Core\IpGuard.Core.csproj" />
+  </ItemGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="Assets\ready.ico" LogicalName="icons.ready.ico" />

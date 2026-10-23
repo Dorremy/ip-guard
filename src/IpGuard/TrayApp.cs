@@ -645,30 +645,14 @@ public sealed class TrayApp : ApplicationContext
 
     private void Record(string reason, Verdict verdict, IpInfo? info)
     {
-        var place = info is null ? "адрес не определён" : $"{info.Ip} {info.CountryCode}";
-        var proxy = SystemProxy.Current() is null ? "без прокси" : "через прокси";
-        var paused = primary.PausedSources.Count == 0 ? "" : $" | на паузе: {string.Join(", ", primary.PausedSources)}";
-        var summary = $"{Labels.For(verdict.Status)} | {place} | {proxy}{paused}";
+        var summary = CheckRecord.Summary(verdict, info, SystemProxy.Current() is not null, primary.PausedSources);
         if (reason == "таймер" && !verdict.Notify && summary == lastRecord)
         {
             return;
         }
 
         lastRecord = summary;
-        var leak = monitor.Leak is null ? "" : $" | {monitor.Leak}";
-        var alert = verdict.Notify ? " | уведомление" : "";
-        if (watcher.LastOutage is { } outage)
-        {
-            alert += $" | связи не было {IpWatcher.FormatDuration(outage)}";
-        }
-
-        if (monitor.Disagreement is { } disagreement)
-        {
-            alert += $" | источники расходятся: {disagreement}";
-        }
-
-        var provider = string.IsNullOrEmpty(info?.Provider) ? "" : $" | {info.Provider}";
-        journal.Write($"{reason}: {summary}{provider}{leak}{alert}");
+        journal.Write(CheckRecord.Line(reason, summary, verdict, info, monitor.Leak, watcher.LastOutage, monitor.Disagreement));
     }
 
     private void Persist()
